@@ -132,8 +132,10 @@
   .sync-btn:active{ filter:brightness(1.15); }
   .sync-btn .sync-icon{ display:inline-block; font-size:15px; line-height:1; }
   .sync-btn.spin .sync-icon{ animation:spin .7s linear infinite; }
-  .stats{ display:flex; gap:22px; margin-left:auto; align-items:center; flex-wrap:wrap; }
+  .stats{ display:none; gap:22px; margin-left:auto; align-items:center; flex-wrap:wrap; }
+  .stats.visible{ display:flex; }
   .stat{ text-align:right; }
+  .mobile-stat{ display:none; }
   .stat .n{ font-family:'IBM Plex Mono',monospace; font-size:19px; font-weight:600; color:var(--ink); display:block; line-height:1.1; }
   .stat .l{ font-size:10.5px; color:var(--slate); text-transform:uppercase; letter-spacing:.5px; }
 
@@ -329,7 +331,15 @@
     .config .row{ flex-direction:column; align-items:stretch; }
     .config input[type=text]{ min-width:0; }
     .toolbar{ padding:12px 16px; gap:12px; }
-    .stats{ display:none; }
+    /* Class-based visibility (see setStatsVisible in the script) means this
+       reliably wins on mobile — no inline-style specificity fight. */
+    .stats.visible{ display:none; }
+    .mobile-stat.visible{
+      display:block; width:100%; order:4;
+      font-family:'IBM Plex Mono',monospace; font-size:13px; font-weight:600;
+      color:var(--green); background:var(--green-soft); border:1px solid #c3ddcb;
+      border-radius:8px; padding:8px 12px; text-align:center;
+    }
     select, .search input{ min-width:0; width:100%; font-size:16px; } /* 16px avoids iOS auto-zoom on focus */
     .field{ width:100%; }
     .sync-field{ display:block; order:2; width:100%; }
@@ -357,6 +367,10 @@
     .mobile-list li.customer-item:active{ background:#f5f2e8; }
     .mobile-list li.customer-item.complete{ background:var(--green-soft); border-color:#c3ddcb; }
     .mobile-list .cust-left{ display:flex; align-items:center; gap:8px; min-width:0; }
+    .mobile-list .cust-check{
+      flex-shrink:0; width:20px; height:20px; border-radius:50%; background:var(--green);
+      color:#fff; font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center;
+    }
     .mobile-list .cust-name{
       font-size:15px; font-weight:600; color:var(--ink); overflow:hidden;
       text-overflow:ellipsis; white-space:nowrap;
@@ -364,6 +378,14 @@
     .mobile-list .cust-name.unregistered{ color:var(--slate); font-style:italic; font-weight:500; }
     .mobile-list .cust-right{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
     .mobile-list .cust-arrow{ color:var(--slate); font-size:16px; }
+    .mobile-list .section-header{
+      display:flex; align-items:center; gap:6px;
+      font-family:'IBM Plex Mono',monospace; font-size:11.5px; font-weight:700;
+      text-transform:uppercase; letter-spacing:.6px; color:var(--green); padding:4px 2px 8px;
+    }
+    .mobile-list .section-header .count{
+      background:var(--green); color:#fff; border-radius:10px; padding:1px 7px; font-size:10.5px;
+    }
 
     /* ---- Modal: full screen on mobile ---- */
     .modal-overlay{ padding:0; align-items:stretch; }
@@ -425,7 +447,7 @@
     <div class="field sync-field" id="syncField">
       <button class="sync-btn" id="syncBtn" type="button"><span class="sync-icon">&#8635;</span><span>Sync</span></button>
     </div>
-    <div class="stats" id="statsBar" style="display:none;">
+    <div class="stats" id="statsBar">
       <div class="stat"><span class="n" id="statTotal">0</span><span class="l">Customers</span></div>
       <div class="stat"><span class="n" id="statComplete">0</span><span class="l">Complete</span></div>
       <div class="stat"><span class="n" id="statMissing">0</span><span class="l">Missing docs</span></div>
@@ -437,6 +459,7 @@
         <div class="pct" id="dialPct">0%</div>
       </div>
     </div>
+    <div class="mobile-stat" id="mobileStat">0 of 0 checked</div>
   </div>
 
   <main id="mainArea">
@@ -533,6 +556,7 @@
     statTotal: document.getElementById('statTotal'),
     statComplete: document.getElementById('statComplete'),
     statMissing: document.getElementById('statMissing'),
+    mobileStat: document.getElementById('mobileStat'),
     dialArc: document.getElementById('dialArc'),
     dialPct: document.getElementById('dialPct'),
     mainArea: document.getElementById('mainArea'),
@@ -551,6 +575,14 @@
   function setConn(mode, text){
     els.connDot.className = 'dot' + (mode ? ' ' + mode : '');
     els.connText.textContent = text;
+  }
+
+  // Desktop shows the full stats bar; mobile shows the compact "X of Y
+  // checked" line instead (see .stats.visible / .mobile-stat.visible CSS).
+  // Both are driven off the same class so they always show/hide together.
+  function setStatsVisible(visible){
+    els.statsBar.classList.toggle('visible', visible);
+    els.mobileStat.classList.toggle('visible', visible);
   }
 
   // ================= OFFLINE CACHE + AUTO-SYNC QUEUE =====================
@@ -752,7 +784,7 @@
       state.contractTypeColumns = c.contractTypeColumns;
       state.contractTypeLabels = c.contractTypeLabels || {};
       state.rows = c.rows;
-      els.statsBar.style.display = 'flex';
+      setStatsVisible(true);
       render();
       setConn('', 'Offline — cached data (' + timeAgo(cached.savedAt) + ')');
     }
@@ -819,7 +851,7 @@
   els.branchSelect.addEventListener('change', function(){
     state.currentBranch = this.value;
     updateAddButtonState();
-    if (!state.currentBranch){ els.statsBar.style.display = 'none'; return; }
+    if (!state.currentBranch){ setStatsVisible(false); return; }
     loadBranchData(false);
   });
 
@@ -924,7 +956,7 @@
       state.contractTypeColumns = cached.contractTypeColumns;
       state.contractTypeLabels = cached.contractTypeLabels || {};
       state.rows = cached.rows;
-      els.statsBar.style.display = 'flex';
+      setStatsVisible(true);
       render();
       persistCache();
       if (done) done();
@@ -977,7 +1009,7 @@
 
       state.rows = rows;
       state.branchCache[branch] = { docColumns: state.docColumns, contractTypeColumns: state.contractTypeColumns, contractTypeLabels: state.contractTypeLabels, rows: rows };
-      els.statsBar.style.display = 'flex';
+      setStatsVisible(true);
       render();
       setConn('on', 'Connected');
       persistCache();
@@ -1049,13 +1081,19 @@
     var total = state.rows.length;
     var completeCount = 0, missingCount = 0;
     state.rows.forEach(function(r){
-      var checked = state.docColumns.filter(function(h){ return isChecked(r.docs[h]); }).length;
-      if (checked === state.docColumns.length) completeCount++;
-      missingCount += (state.docColumns.length - checked);
+      // Each doc column is really "NO <document>" — ticking it means staff
+      // already reviewed that document and flagged it missing. So a row
+      // counts as "checked/done" once AT LEAST ONE box is ticked (someone
+      // has been through it), not when zero are ticked. A totally blank
+      // row hasn't been reviewed yet — that's "pending", not "complete".
+      var missingHere = state.docColumns.filter(function(h){ return isChecked(r.docs[h]); }).length;
+      if (missingHere > 0) completeCount++;
+      missingCount += missingHere;
     });
     els.statTotal.textContent = total;
     els.statComplete.textContent = completeCount;
     els.statMissing.textContent = missingCount;
+    els.mobileStat.textContent = completeCount + ' of ' + total + ' checked';
     var pct = total ? Math.round((completeCount/total)*100) : 0;
     var circumference = 138.2;
     els.dialArc.setAttribute('stroke-dashoffset', circumference - (circumference*pct/100));
@@ -1070,8 +1108,8 @@
       state.docColumns.map(function(h){ return '<th>' + escapeHtml(docLabel(h)) + '</th>'; }).join('') + '</tr>';
 
     var tbody = rows.map(function(r){
-      var checkedCount = state.docColumns.filter(function(h){ return isChecked(r.docs[h]); }).length;
-      var complete = state.docColumns.length > 0 && checkedCount === state.docColumns.length;
+      var missingHere = state.docColumns.filter(function(h){ return isChecked(r.docs[h]); }).length;
+      var complete = missingHere > 0;
       var isNew = r.rowIndex === null || r.rowIndex === undefined;
       var isPending = isPendingRow(state.currentBranch, r.uid);
       var cells = state.docColumns.map(function(h){
@@ -1090,28 +1128,55 @@
     var sortedRows = rows.slice().sort(function(a, b){
       return a.customerName.toLowerCase().localeCompare(b.customerName.toLowerCase());
     });
-    var mobileHtml = '';
-    var lastLetter = null;
-    sortedRows.forEach(function(r){
-      var letter = (r.customerName.trim().charAt(0) || '#').toUpperCase();
-      if (!/[A-Z]/.test(letter)) letter = '#';
-      if (letter !== lastLetter){
-        mobileHtml += '<li class="letter-header">' + escapeHtml(letter) + '</li>';
-        lastLetter = letter;
-      }
-      var checkedCount = state.docColumns.filter(function(h){ return isChecked(r.docs[h]); }).length;
-      var complete = state.docColumns.length > 0 && checkedCount === state.docColumns.length;
+
+    function rowIsComplete(r){
+      // "Done/checked" = at least one box ticked (staff already reviewed
+      // this customer and flagged whatever's missing). Zero ticks = not
+      // yet reviewed = "Pending", not done.
+      var missingHere = state.docColumns.filter(function(h){ return isChecked(r.docs[h]); }).length;
+      return missingHere > 0;
+    }
+
+    function renderMobileItem(r){
+      var complete = rowIsComplete(r);
       var isNew = r.rowIndex === null || r.rowIndex === undefined;
       var isPending = isPendingRow(state.currentBranch, r.uid);
-      mobileHtml += '<li class="customer-item' + (complete ? ' complete' : '') + '" data-uid="' + escapeAttr(r.uid) + '">' +
-        '<span class="cust-left"><span class="cust-name' + (isNew ? ' unregistered' : '') + '">' + escapeHtml(r.customerName) + '</span></span>' +
+      return '<li class="customer-item' + (complete ? ' complete' : '') + '" data-uid="' + escapeAttr(r.uid) + '">' +
+        '<span class="cust-left">' +
+          (complete ? '<span class="cust-check">&#10003;</span>' : '') +
+          '<span class="cust-name' + (isNew ? ' unregistered' : '') + '">' + escapeHtml(r.customerName) + '</span></span>' +
         '<span class="cust-right">' +
-          (complete ? '<span class="stamp">Verified</span>' : '') +
           (isNew ? '<span class="badge-new">New</span>' : '') +
           (isPending ? '<span class="badge-pending">Pending</span>' : '') +
           '<span class="cust-arrow">&#8250;</span>' +
         '</span></li>';
-    });
+    }
+
+    // Done customers surface as their own group up top (still A–Z within
+    // that group) — otherwise, on a long alphabetical list, a finished
+    // customer is easy to miss buried between unrelated names.
+    var doneRows = sortedRows.filter(rowIsComplete);
+    var pendingRows = sortedRows.filter(function(r){ return !rowIsComplete(r); });
+
+    var mobileHtml = '';
+    if (doneRows.length){
+      mobileHtml += '<li class="section-header">&#10003; Completed <span class="count">' + doneRows.length + '</span></li>';
+      mobileHtml += doneRows.map(renderMobileItem).join('');
+    }
+
+    var lastLetter = null;
+    if (pendingRows.length){
+      mobileHtml += '<li class="section-header">Pending</li>';
+      pendingRows.forEach(function(r){
+        var letter = (r.customerName.trim().charAt(0) || '#').toUpperCase();
+        if (!/[A-Z]/.test(letter)) letter = '#';
+        if (letter !== lastLetter){
+          mobileHtml += '<li class="letter-header">' + escapeHtml(letter) + '</li>';
+          lastLetter = letter;
+        }
+        mobileHtml += renderMobileItem(r);
+      });
+    }
 
     els.mainArea.innerHTML = '<table class="ledger"><thead>' + thead + '</thead><tbody>' + tbody + '</tbody></table>' +
       '<ul class="mobile-list" id="mobileList">' + mobileHtml + '</ul>';
@@ -1156,12 +1221,30 @@
   }
   function escapeAttr(s){ return escapeHtml(s); }
 
-  var modalState = { uid: null };
+  var modalState = { uid: null, historyPushed: false };
+
+  // ---- Make the phone's back gesture close the modal instead of leaving
+  // the site. Opening the modal pushes a throwaway history entry; the
+  // back gesture fires 'popstate' (not a real navigation) which we catch
+  // and use to just close the modal. If the modal is closed normally (X,
+  // tapping outside, Done), we consume that same history entry ourselves
+  // via history.back() so the browser's back stack stays clean and a
+  // second back-tap doesn't do anything unexpected.
+  window.addEventListener('popstate', function(){
+    if (modalState.uid !== null) {
+      closeCustomerModal(true);
+    }
+  });
 
   function openCustomerModal(uid){
     var row = state.rows.find(function(r){ return r.uid === uid; });
     if (!row) return;
     modalState.uid = uid;
+
+    if (!modalState.historyPushed) {
+      history.pushState({ ledgerModal: true }, '', location.href);
+      modalState.historyPushed = true;
+    }
 
     els.modalTitle.textContent = row.customerName;
 
@@ -1230,13 +1313,20 @@
     }
   }
 
-  function closeCustomerModal(){
+  function closeCustomerModal(fromPopState){
     els.modalOverlay.classList.remove('show');
     if (autosaveTimer){ clearTimeout(autosaveTimer); autosaveTimer = null; }
     modalState.uid = null;
+    if (modalState.historyPushed) {
+      modalState.historyPushed = false;
+      // Closed by tapping X / outside / Done — not by the back gesture —
+      // so pop the throwaway entry we pushed ourselves, keeping the back
+      // stack exactly where it was before the modal opened.
+      if (!fromPopState) history.back();
+    }
   }
 
-  els.modalClose.addEventListener('click', closeCustomerModal);
+  els.modalClose.addEventListener('click', function(){ closeCustomerModal(); });
   els.modalOverlay.addEventListener('click', function(e){
     if (e.target === els.modalOverlay) closeCustomerModal();
   });
