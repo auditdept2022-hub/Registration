@@ -68,6 +68,12 @@
   .dot.on{ background:#4caf7d; box-shadow:0 0 0 3px rgba(76,175,125,.25); }
   .dot.pending{ background:var(--amber); box-shadow:0 0 0 3px rgba(201,138,44,.25); animation:pulse 1.1s infinite; }
   @keyframes pulse{ 0%,100%{opacity:1;} 50%{opacity:.35;} }
+  .sync-stamp{
+    font-family:'IBM Plex Mono',monospace; font-size:11px; color:#9fabc7;
+    padding-left:8px; margin-left:2px; border-left:1px solid rgba(255,255,255,.18);
+    white-space:nowrap;
+  }
+  .sync-stamp:empty{ display:none; padding-left:0; margin-left:0; border-left:none; }
 
   button.linklike{
     background:none;border:1px solid rgba(255,255,255,.35);color:var(--paper);
@@ -410,6 +416,7 @@
     <div class="conn" id="connBadge">
       <span class="dot" id="connDot"></span>
       <span id="connText">Not connected</span>
+      <span class="sync-stamp" id="syncStamp"></span>
     </div>
     <button class="pending-pill" id="pendingPill" type="button" title="Click to sync now">
       <span>&#8635;</span><span id="pendingText">0 pending</span>
@@ -529,12 +536,14 @@
     contractTypeLabels: {}, // rawHeader -> clean 'MF'/'MW' label for display
     rows: [],
     search: "",
-    branchCache: {} // branch name -> { docColumns, contractTypeColumns, contractTypeLabels, rows } — avoids re-fetching on every switch
+    branchCache: {}, // branch name -> { docColumns, contractTypeColumns, contractTypeLabels, rows } — avoids re-fetching on every switch
+    lastSyncedAt: null // ms epoch of the last successful round trip to the sheet (load OR save)
   };
 
   var els = {
     connDot: document.getElementById('connDot'),
     connText: document.getElementById('connText'),
+    syncStamp: document.getElementById('syncStamp'),
     pendingPill: document.getElementById('pendingPill'),
     pendingText: document.getElementById('pendingText'),
     settingsBtn: document.getElementById('settingsBtn'),
@@ -577,6 +586,23 @@
     els.connText.textContent = text;
   }
 
+  // ---- LIVE "SYNCED" TIMESTAMP -----------------------------------------
+  // Stamped every time we actually hear back from the sheet — a successful
+  // load OR a successful save — so it's always obvious how fresh/stale the
+  // on-screen data is, separate from the online/offline dot above it.
+  function fmtClock(ts){
+    return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+  function renderSyncStamp(){
+    if (!state.lastSyncedAt){ els.syncStamp.textContent = ''; return; }
+    els.syncStamp.textContent = 'Synced ' + fmtClock(state.lastSyncedAt);
+  }
+  function markSynced(){
+    state.lastSyncedAt = Date.now();
+    renderSyncStamp();
+  }
+  setInterval(renderSyncStamp, 1000); // keeps the clock-face timestamp itself accurate (e.g. across a re-render)
+
   // Desktop shows the full stats bar; mobile shows the compact "X of Y
   // checked" line instead (see .stats.visible / .mobile-stat.visible CSS).
   // Both are driven off the same class so they always show/hide together.
@@ -603,6 +629,7 @@
         branches: state.branches,
         branchCache: state.branchCache,
         lastBranch: state.currentBranch,
+        lastSyncedAt: state.lastSyncedAt,
         savedAt: Date.now()
       }));
     }catch(e){ /* storage unavailable/full — offline cache just won't persist */ }
@@ -692,6 +719,7 @@
     return chain.then(function(){
       updatePendingPill();
       if (synced > 0){
+        markSynced();
         persistCache();
         if (state.currentBranch) state.branchCache[state.currentBranch] = {
           docColumns: state.docColumns, contractTypeColumns: state.contractTypeColumns,
@@ -707,6 +735,23 @@
   window.addEventListener('online', function(){
     flushPendingQueue();
     if (state.currentBranch) loadBranchData(true);
+  });
+
+  // Auto-retry whatever's stuck in the pending queue every 20s (instead of
+  // only on the 'online' event, a manual pill-tap, or the next branch
+  // load) — so a save that failed once (bad signal, momentary hiccup)
+  // doesn't just sit there until the user happens to trigger a retry.
+  setInterval(function(){
+    if (Object.keys(pendingQueue).length && navigator.onLine !== false) flushPendingQueue(true);
+  }, 20000);
+
+  // Also retry the moment the tab/app comes back into view — covers phones
+  // where the browser was backgrounded while offline and the 'online'
+  // event never fired.
+  document.addEventListener('visibilitychange', function(){
+    if (document.visibilityState === 'visible' && Object.keys(pendingQueue).length){
+      flushPendingQueue(true);
+    }
   });
 
   function applyDocsToRow(row, docs){
@@ -746,6 +791,7 @@
         docColumns: state.docColumns, contractTypeColumns: state.contractTypeColumns,
         contractTypeLabels: state.contractTypeLabels, rows: state.rows
       };
+      markSynced();
       persistCache();
       showToast(opts.savedMsg || 'Saved');
       return true;
@@ -772,6 +818,8 @@
     if (!cached) return;
     state.branches = cached.branches || [];
     state.branchCache = cached.branchCache || {};
+    state.lastSyncedAt = cached.lastSyncedAt || null;
+    renderSyncStamp();
     if (state.branches.length){
       els.branchSelect.innerHTML = '<option value="">Select a branch…</option>' +
         state.branches.map(function(b){ return '<option value="' + escapeAttr(b) + '">' + escapeHtml(b) + '</option>'; }).join('');
@@ -807,6 +855,26 @@
 
   if (state.url) els.urlInput.value = state.url;
 
+  // A stalled/dropped connection used to leave a save hanging with no
+  // timeout at all — it just sat there indefinitely instead of failing
+  // over to the local pending queue. Every request now gets a hard cutoff
+  // so a bad connection fails fast instead of "taking forever".
+  var API_TIMEOUT_MS = 15000;
+
+  function fetchWithTimeout(url, opts){
+    var controller = ('AbortController' in window) ? new AbortController() : null;
+    if (controller) opts = Object.assign({}, opts, { signal: controller.signal });
+    var timer = controller ? setTimeout(function(){ controller.abort(); }, API_TIMEOUT_MS) : null;
+    return fetch(url, opts).then(function(r){
+      if (timer) clearTimeout(timer);
+      return r;
+    }).catch(function(err){
+      if (timer) clearTimeout(timer);
+      if (err && err.name === 'AbortError') throw new Error('Request timed out');
+      throw err;
+    });
+  }
+
   function api(params, method, body){
     var url = state.url;
     if (method === 'GET' || !method){
@@ -814,9 +882,9 @@
         return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
       }).join('&');
       url += (url.indexOf('?') === -1 ? '?' : '&') + qs;
-      return fetch(url).then(function(r){ return r.json(); });
+      return fetchWithTimeout(url).then(function(r){ return r.json(); });
     } else {
-      return fetch(url, {
+      return fetchWithTimeout(url, {
         method: 'POST',
         body: JSON.stringify(body)
       }).then(function(r){ return r.json(); });
@@ -833,6 +901,7 @@
         state.branches.map(function(b){ return '<option value="' + escapeAttr(b) + '">' + escapeHtml(b) + '</option>'; }).join('');
       if (state.currentBranch) els.branchSelect.value = state.currentBranch;
       setConn('on', 'Connected');
+      markSynced();
       persistCache();
       flushPendingQueue(true);
     }).catch(function(err){
@@ -1012,6 +1081,7 @@
       setStatsVisible(true);
       render();
       setConn('on', 'Connected');
+      markSynced();
       persistCache();
       flushPendingQueue(true);
       if (done) done();
