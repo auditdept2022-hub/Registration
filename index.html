@@ -329,7 +329,7 @@
     .config .row{ flex-direction:column; align-items:stretch; }
     .config input[type=text]{ min-width:0; }
     .toolbar{ padding:12px 16px; gap:12px; }
-    .stats{ margin-left:0; width:100%; justify-content:space-between; }
+    .stats{ display:none; }
     select, .search input{ min-width:0; width:100%; font-size:16px; } /* 16px avoids iOS auto-zoom on focus */
     .field{ width:100%; }
     .sync-field{ display:block; order:2; width:100%; }
@@ -1023,6 +1023,24 @@
     return neg.indexOf(s.toUpperCase()) === -1;
   }
 
+  // The MF/MW checkboxes (state.contractTypeColumns) are the real source of
+  // truth for a row's contract type — the free-text "Contract" column on the
+  // sheet sometimes still shows a stale/default value (e.g. a whole tab
+  // typed "MOTOWHEELS" once) even when a customer is actually MF. Whenever a
+  // checkbox is ticked, trust it over the raw text; only fall back to the
+  // raw text column when no checkbox is set at all.
+  function contractDisplay(row){
+    if (row && row.contractType && state.contractTypeColumns.length) {
+      for (var i = 0; i < state.contractTypeColumns.length; i++) {
+        var h = state.contractTypeColumns[i];
+        if (isChecked(row.contractType[h])) {
+          return state.contractTypeLabels[h] || h;
+        }
+      }
+    }
+    return (row && row.typeOfContract) || '';
+  }
+
   function render(){
     var rows = state.rows.filter(function(r){
       return matchesSearch(r.customerName, state.search);
@@ -1063,7 +1081,7 @@
       return '<tr class="' + (complete ? 'complete' : '') + (isNew ? ' unregistered' : '') + '" data-rowkey="' + escapeAttr(r.uid) + '">' +
         '<td class="no" data-label="No.">' + escapeHtml(String(r.no || '')) + '</td>' +
         '<td class="customer" data-uid="' + escapeAttr(r.uid) + '" data-label="Customer">' + escapeHtml(r.customerName) + (complete ? ' <span class="stamp">Verified</span>' : '') + (isNew ? ' <span class="badge-new">New</span>' : '') + (isPending ? ' <span class="badge-pending">Pending sync</span>' : '') + '</td>' +
-        '<td class="contract" data-label="Contract">' + escapeHtml(r.typeOfContract || '') + '</td>' +
+        '<td class="contract" data-label="Contract">' + escapeHtml(contractDisplay(r)) + '</td>' +
         '<td class="notes" data-label="Notes" title="' + escapeAttr(r.notes || '') + '">' + escapeHtml(r.notes || '') + '</td>' +
         cells + '</tr>';
     }).join('');
@@ -1149,7 +1167,8 @@
 
     var metaParts = [];
     if (state.currentBranch) metaParts.push('<span>' + escapeHtml(state.currentBranch) + '</span>');
-    if (row.typeOfContract) metaParts.push('<span>' + escapeHtml(row.typeOfContract) + '</span>');
+    var contractLabel = contractDisplay(row);
+    if (contractLabel) metaParts.push('<span>' + escapeHtml(contractLabel) + '</span>');
     if (row.engineNo) metaParts.push('<span class="mono">' + escapeHtml(row.engineNo) + '</span>');
     if (row.invoicedDate) metaParts.push('<span>Invoiced ' + escapeHtml(row.invoicedDate) + '</span>');
     els.modalMeta.innerHTML = metaParts.join('<span class="sep">&middot;</span>');
