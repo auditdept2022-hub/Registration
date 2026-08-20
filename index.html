@@ -196,6 +196,69 @@
   .pending-pill.show{ display:flex; }
   .pending-pill.syncing{ opacity:.75; cursor:wait; }
   .pending-pill.syncing span:first-child{ display:inline-block; animation:spin .7s linear infinite; }
+
+  /* ---------- Manual online/offline toggle ---------- */
+  .offline-toggle{
+    display:flex; align-items:center; gap:7px; font-size:12px; color:var(--paper);
+    background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.35);
+    padding:6px 12px; border-radius:20px; cursor:pointer; font-weight:600;
+    font-family:'Inter',sans-serif;
+  }
+  .offline-toggle:hover{ background:rgba(255,255,255,.12); }
+  .offline-toggle .ot-dot{
+    width:8px; height:8px; border-radius:50%; background:#4caf7d;
+    box-shadow:0 0 0 3px rgba(76,175,125,.25); flex-shrink:0;
+  }
+  .offline-toggle.is-offline{
+    background:var(--rust-soft); border-color:var(--rust); color:#7a2c20;
+  }
+  .offline-toggle.is-offline .ot-dot{
+    background:var(--rust); box-shadow:0 0 0 3px rgba(179,74,58,.25);
+  }
+
+  /* ---------- Notification bell ---------- */
+  .bell-wrap{ position:relative; }
+  .bell-btn{
+    background:none; border:1px solid rgba(255,255,255,.35); color:var(--paper);
+    width:34px; height:34px; border-radius:8px; cursor:pointer; position:relative;
+    display:flex; align-items:center; justify-content:center; font-size:16px; flex-shrink:0;
+  }
+  .bell-btn:hover{ background:rgba(255,255,255,.08); }
+  .bell-badge{
+    display:none; position:absolute; top:-6px; right:-6px; background:var(--rust); color:#fff;
+    font-size:10px; font-weight:700; min-width:16px; height:16px; border-radius:8px;
+    align-items:center; justify-content:center; padding:0 4px; font-family:'IBM Plex Mono',monospace;
+    box-shadow:0 0 0 2px var(--ink);
+  }
+  .notif-panel{
+    display:none; position:absolute; top:44px; right:0; width:310px; max-height:380px;
+    overflow-y:auto; background:#fff; color:var(--ink-text); border:1px solid var(--line);
+    border-radius:10px; box-shadow:0 14px 40px rgba(0,0,0,.25); z-index:1500;
+  }
+  .notif-panel.show{ display:block; }
+  .notif-header{
+    display:flex; align-items:center; justify-content:space-between; padding:12px 14px;
+    border-bottom:1px solid var(--line); font-size:11.5px; font-weight:700; color:var(--ink);
+    text-transform:uppercase; letter-spacing:.4px; position:sticky; top:0; background:#fff;
+  }
+  .notif-clear{ background:none; border:none; color:var(--slate); font-size:11.5px; cursor:pointer; font-weight:600; }
+  .notif-clear:hover{ color:var(--rust); }
+  .notif-empty{ padding:28px 14px; text-align:center; color:var(--slate); font-size:12.5px; }
+  .notif-item{ display:flex; gap:10px; padding:11px 14px; border-bottom:1px solid var(--line); font-size:12.5px; align-items:flex-start; }
+  .notif-item:last-child{ border-bottom:none; }
+  .notif-ic{
+    width:22px; height:22px; border-radius:50%; flex-shrink:0; margin-top:1px;
+    display:flex; align-items:center; justify-content:center; font-size:11.5px; font-weight:700;
+  }
+  .notif-ic.synced{ background:var(--green-soft); color:var(--green); }
+  .notif-ic.offline{ background:var(--amber-soft); color:#a5680f; }
+  .notif-body .name{ font-weight:600; color:var(--ink); }
+  .notif-body .desc{ color:var(--slate); margin-top:1px; }
+  .notif-body .time{ color:var(--slate); font-family:'IBM Plex Mono',monospace; font-size:10.5px; margin-top:3px; }
+
+  @media (max-width:720px){
+    .notif-panel{ position:fixed; top:auto; left:10px; right:10px; width:auto; margin-top:8px; }
+  }
   tr.unregistered td.customer{ color:var(--slate); font-weight:500; font-style:italic; }
   table.ledger td.customer{ cursor:pointer; }
   table.ledger td.customer:hover{ text-decoration:underline; }
@@ -350,11 +413,20 @@
     }
     select, .search input{ min-width:0; width:100%; font-size:16px; } /* 16px avoids iOS auto-zoom on focus */
     .field{ width:100%; }
-    .sync-field{ display:block; order:2; width:100%; }
-    .add-field{ width:100%; order:1; }
+    .sync-field{ display:block; order:3; width:100%; }
+    .add-field{ width:100%; order:2; }
     .add-btn{ width:100%; padding:12px; font-size:14px; }
     .sync-btn{ width:100%; padding:12px; font-size:14px; }
-    .search{ order:3; }
+    /* Search goes FIRST — so on-screen keyboard opens with the search box
+       (and the matching results right under it) already near the top of
+       the viewport, instead of the keyboard covering the name list further
+       down the page. Branch picker follows right after, shrunk down since
+       it's no longer the first thing on screen. */
+    .search{ order:0; }
+    .branch-field{ order:1; }
+    .branch-field label{ font-size:9.5px; }
+    .branch-field select{ padding:7px 10px; font-size:13.5px; min-height:0; }
+    .branch-field .refresh-btn{ width:30px; height:30px; font-size:13px; }
     main{ padding:14px 10px 50px; overflow-x:visible; }
 
     /* ---- On mobile: hide the full ledger table, show a simple name list ---- */
@@ -423,6 +495,22 @@
     <button class="pending-pill" id="pendingPill" type="button" title="Click to sync now">
       <span>&#8635;</span><span id="pendingText">0 pending</span>
     </button>
+    <button class="offline-toggle" id="offlineToggleBtn" type="button" title="Force offline / online mode">
+      <span class="ot-dot"></span><span id="offlineToggleText">Go Offline</span>
+    </button>
+    <div class="bell-wrap">
+      <button class="bell-btn" id="bellBtn" type="button" title="Notifications">
+        <span>&#128276;</span>
+        <span class="bell-badge" id="bellBadge">0</span>
+      </button>
+      <div class="notif-panel" id="notifPanel">
+        <div class="notif-header">
+          <span>Activity</span>
+          <button class="notif-clear" id="notifClearBtn" type="button">Clear</button>
+        </div>
+        <div class="notif-list" id="notifList"></div>
+      </div>
+    </div>
     <button class="linklike" id="settingsBtn">Sync settings</button>
   </header>
 
@@ -438,7 +526,7 @@
   </div>
 
   <div class="toolbar">
-    <div class="field">
+    <div class="field branch-field">
       <label for="branchSelect">Branch</label>
       <div style="display:flex; gap:8px;">
         <select id="branchSelect" style="flex:1;"><option>Connect to load branches…</option></select>
@@ -510,13 +598,13 @@
   <div class="modal-card" style="max-width:380px;">
     <div class="modal-header">
       <button class="modal-close" id="addModalClose" aria-label="Close">&times;</button>
-      <h2>Bagong Customer</h2>
+      <h2>Add New Customer</h2>
     </div>
     <div class="modal-body">
-      <label class="add-name-field"><span>Customer Name</span><input type="text" id="addNameInput" placeholder="Apelyido, Pangalan"></label>
+      <label class="add-name-field"><span>Customer Name</span><input type="text" id="addNameInput" placeholder="Last Name, First Name"></label>
     </div>
     <div class="modal-footer">
-      <button class="save-checklist-btn" id="addNameSubmit">Idagdag</button>
+      <button class="save-checklist-btn" id="addNameSubmit">Add</button>
     </div>
   </div>
 </div>
@@ -547,7 +635,8 @@
     rows: [],
     search: "",
     branchCache: {}, // branch name -> { docColumns, contractTypeColumns, contractTypeLabels, rows } — avoids re-fetching on every switch
-    lastSyncedAt: null // ms epoch of the last successful round trip to the sheet (load OR save)
+    lastSyncedAt: null, // ms epoch of the last successful round trip to the sheet (load OR save)
+    manualOffline: false // user-forced offline mode via the Go Offline/Online button — see setManualOffline()
   };
 
   var els = {
@@ -556,6 +645,13 @@
     syncStamp: document.getElementById('syncStamp'),
     pendingPill: document.getElementById('pendingPill'),
     pendingText: document.getElementById('pendingText'),
+    offlineToggleBtn: document.getElementById('offlineToggleBtn'),
+    offlineToggleText: document.getElementById('offlineToggleText'),
+    bellBtn: document.getElementById('bellBtn'),
+    bellBadge: document.getElementById('bellBadge'),
+    notifPanel: document.getElementById('notifPanel'),
+    notifList: document.getElementById('notifList'),
+    notifClearBtn: document.getElementById('notifClearBtn'),
     settingsBtn: document.getElementById('settingsBtn'),
     configPanel: document.getElementById('configPanel'),
     urlInput: document.getElementById('urlInput'),
@@ -631,7 +727,55 @@
 
   var CACHE_KEY = 'rs_dashboard_cache_v1';
   var PENDING_KEY = 'rs_dashboard_pending_v1';
+  var MANUAL_OFFLINE_KEY = 'rs_dashboard_manual_offline_v1';
   var pendingQueue = loadPendingQueue();
+
+  // ================= MANUAL ONLINE / OFFLINE TOGGLE ======================
+  // A user-controlled switch, independent of the browser's real connectivity.
+  // Flipping to OFFLINE makes every save skip the network entirely and go
+  // straight into the same pending queue used for real dropped-connection
+  // saves — nothing is lost, it just waits. Flipping back to ONLINE resumes
+  // normal auto-save (writes reach the sheet within a few seconds) and
+  // immediately flushes anything that piled up while offline.
+  function loadManualOffline(){
+    try{ return localStorage.getItem(MANUAL_OFFLINE_KEY) === '1'; }catch(e){ return false; }
+  }
+  function saveManualOffline(val){
+    try{ localStorage.setItem(MANUAL_OFFLINE_KEY, val ? '1' : '0'); }catch(e){}
+  }
+  state.manualOffline = loadManualOffline();
+
+  function renderOfflineToggle(){
+    if (state.manualOffline){
+      els.offlineToggleBtn.classList.add('is-offline');
+      els.offlineToggleText.textContent = 'Offline — tap to go online';
+    } else {
+      els.offlineToggleBtn.classList.remove('is-offline');
+      els.offlineToggleText.textContent = 'Go Offline';
+    }
+  }
+
+  function setManualOffline(val){
+    if (state.manualOffline === val) return;
+    state.manualOffline = val;
+    saveManualOffline(val);
+    renderOfflineToggle();
+    if (val){
+      setConn('', 'Offline (manual)');
+      showToast('Offline mode on — changes save locally and sync once you go back online');
+    } else {
+      showToast('Back online — syncing…');
+      flushPendingQueue();
+      if (state.currentBranch) loadBranchData(true);
+      else if (state.url) loadBranches();
+    }
+  }
+
+  els.offlineToggleBtn.addEventListener('click', function(){
+    setManualOffline(!state.manualOffline);
+  });
+  renderOfflineToggle();
+  // =========================================================================
 
   function persistCache(){
     try{
@@ -693,6 +837,93 @@
     els.pendingPill.classList.toggle('show', n > 0);
   }
 
+  // ================= NOTIFICATION BELL ====================================
+  // A running history of "what just happened to which customer" — saved
+  // offline (queued locally) or actually synced to the Google Sheet — so
+  // staff can glance at the bell and see exactly who's been recorded,
+  // instead of only getting a fleeting toast that's easy to miss. Kept in
+  // localStorage so the history survives a refresh.
+  var NOTIF_KEY = 'rs_dashboard_notifs_v1';
+  var notifications = loadNotifications();
+  var unreadCount = 0;
+
+  function loadNotifications(){
+    try{
+      var raw = localStorage.getItem(NOTIF_KEY);
+      return raw ? JSON.parse(raw) : [];
+    }catch(e){ return []; }
+  }
+  function saveNotifications(){
+    try{ localStorage.setItem(NOTIF_KEY, JSON.stringify(notifications.slice(0, 40))); }catch(e){}
+  }
+
+  function addNotification(kind, customerName, branch){
+    notifications.unshift({
+      id: 'n' + Date.now() + Math.random().toString(36).slice(2, 7),
+      kind: kind, // 'offline' (saved locally, waiting to sync) | 'synced' (confirmed on the sheet)
+      customerName: customerName,
+      branch: branch,
+      ts: Date.now()
+    });
+    if (notifications.length > 40) notifications.length = 40;
+    saveNotifications();
+    unreadCount++;
+    updateBellBadge();
+    if (els.notifPanel.classList.contains('show')) renderNotifPanel();
+  }
+
+  function updateBellBadge(){
+    if (unreadCount > 0){
+      els.bellBadge.style.display = 'flex';
+      els.bellBadge.textContent = unreadCount > 99 ? '99+' : String(unreadCount);
+    } else {
+      els.bellBadge.style.display = 'none';
+    }
+  }
+
+  function notifIcon(kind){ return kind === 'synced' ? '&#10003;' : '&#8635;'; }
+  function notifDesc(kind){ return kind === 'synced' ? 'Synced to Google Sheet' : 'Saved offline — waiting to sync'; }
+
+  function renderNotifPanel(){
+    if (!notifications.length){
+      els.notifList.innerHTML = '<div class="notif-empty">No activity yet.</div>';
+      return;
+    }
+    els.notifList.innerHTML = notifications.map(function(n){
+      return '<div class="notif-item">' +
+        '<span class="notif-ic ' + n.kind + '">' + notifIcon(n.kind) + '</span>' +
+        '<div class="notif-body">' +
+          '<div class="name">' + escapeHtml(n.customerName || 'Customer') + '</div>' +
+          '<div class="desc">' + notifDesc(n.kind) + (n.branch ? ' &middot; ' + escapeHtml(n.branch) : '') + '</div>' +
+          '<div class="time">' + fmtClock(n.ts) + '</div>' +
+        '</div></div>';
+    }).join('');
+  }
+
+  els.bellBtn.addEventListener('click', function(e){
+    e.stopPropagation();
+    var willShow = !els.notifPanel.classList.contains('show');
+    els.notifPanel.classList.toggle('show', willShow);
+    if (willShow){
+      renderNotifPanel();
+      unreadCount = 0;
+      updateBellBadge();
+    }
+  });
+  document.addEventListener('click', function(e){
+    if (els.notifPanel.classList.contains('show') && !els.notifPanel.contains(e.target) && e.target !== els.bellBtn){
+      els.notifPanel.classList.remove('show');
+    }
+  });
+  els.notifClearBtn.addEventListener('click', function(e){
+    e.stopPropagation();
+    notifications = [];
+    saveNotifications();
+    renderNotifPanel();
+  });
+  updateBellBadge();
+  // =========================================================================
+
   // Guards against firing overlapping flush attempts (e.g. the 20s
   // interval and a 'visibilitychange' both landing at once) — everyone
   // just gets the one already in flight instead of stacking duplicate
@@ -702,6 +933,7 @@
 
   function flushPendingQueue(silent){
     if (flushInFlight) return flushInFlight;
+    if (state.manualOffline) return Promise.resolve(); // don't touch the network while forced offline
     var keys = Object.keys(pendingQueue);
     if (!keys.length) return Promise.resolve();
     var synced = 0;
@@ -722,6 +954,7 @@
           delete pendingQueue[key];
           savePendingQueue();
           synced++;
+          addNotification('synced', item.customerName, item.branch);
           if (state.currentBranch === item.branch){
             var row = state.rows.find(function(r){ return r.uid === item.uid || (res.rowIndex && r.rowIndex === res.rowIndex); });
             if (row){
@@ -764,8 +997,12 @@
     return flushInFlight;
   }
 
-  els.pendingPill.addEventListener('click', function(){ flushPendingQueue(); });
+  els.pendingPill.addEventListener('click', function(){
+    if (state.manualOffline){ showToast("You're in offline mode — tap Go Offline/Online to reconnect first"); return; }
+    flushPendingQueue();
+  });
   window.addEventListener('online', function(){
+    if (state.manualOffline) return; // still forced offline — ignore the browser's real connectivity
     flushPendingQueue();
     if (state.currentBranch) loadBranchData(true);
   });
@@ -775,6 +1012,7 @@
   // load) — so a save that failed once (bad signal, momentary hiccup)
   // doesn't just sit there until the user happens to trigger a retry.
   setInterval(function(){
+    if (state.manualOffline) return;
     if (Object.keys(pendingQueue).length && navigator.onLine !== false) flushPendingQueue(true);
   }, 20000);
 
@@ -782,6 +1020,7 @@
   // where the browser was backgrounded while offline and the 'online'
   // event never fired.
   document.addEventListener('visibilitychange', function(){
+    if (state.manualOffline) return;
     if (document.visibilityState === 'visible' && Object.keys(pendingQueue).length){
       flushPendingQueue(true);
     }
@@ -803,35 +1042,67 @@
   // the sheet row and writes everything in a single Apps Script call — see
   // action=saveRow — instead of the old two-request ensure-then-save flow).
   //
-  // OPTIMISTIC: the patch is applied to local state (and reflected on
-  // screen) immediately, before the network call even starts — so typing
-  // or ticking a box feels instant instead of waiting on the round trip.
-  // If the request fails (offline, etc.) the change stays applied locally
-  // and is queued for auto-sync the moment a connection comes back.
+  // OPTIMISTIC, TWO STAGES:
+  //   1) Applied to local state AND queued as "pending" IMMEDIATELY, before
+  //      the network call even starts. This is what fixes the "sobrang
+  //      tagal" / stuck-loading complaint: the checklist, the table, and
+  //      the pending counter all update the instant you tap — they don't
+  //      wait for a slow/unstable connection to time out first. Worst case
+  //      (device goes offline mid-request, tab closes, etc.) the change is
+  //      already safely queued and will auto-sync later, nothing is lost.
+  //   2) The network call then runs in the background. On success it's
+  //      cleared from the pending queue and the sheet/HTML both end up in
+  //      sync. On failure it simply stays queued — auto-sync (the 20s
+  //      interval, the 'online' event, visibilitychange, or a manual pill
+  //      tap) will retry it, so a flaky connection resolves itself without
+  //      the user needing to wait around or re-tap anything.
+  // saveRow is an upsert (find-by-rowIndex-or-create, then overwrite the
+  // given fields/docs), so retrying the same patch is always safe even if
+  // an earlier attempt actually landed on the sheet before timing out.
   function persistRow(row, patch, opts){
     opts = opts || {};
     if (patch.fields) applyFieldsToRow(row, patch.fields);
     if (patch.docs) applyDocsToRow(row, patch.docs);
 
+    // Stage 1 — reflect + queue right away, before the request even fires.
+    queueChange(row, patch);
+    persistCache();
+    render();
+
+    // Manual offline mode — stop here. Nothing hits the network; the change
+    // stays queued and will flush automatically the moment the user flips
+    // back to online (see setManualOffline).
+    if (state.manualOffline){
+      addNotification('offline', row.customerName, state.currentBranch);
+      showToast('Saved offline — ' + row.customerName + ' (offline mode)');
+      return Promise.resolve(false);
+    }
+
+    // Stage 2 — try to actually reach the sheet in the background.
     return api(null, 'POST', {
       action: 'saveRow', branch: state.currentBranch, rowIndex: row.rowIndex || null,
       customerName: row.customerName, fields: patch.fields || {}, docs: patch.docs || {}
     }).then(function(res){
       if (!res.ok) throw new Error(res.error || 'Failed to save');
+      var oldUid = row.uid;
       if (res.rowIndex){ row.rowIndex = res.rowIndex; row.uid = 'row-' + res.rowIndex; }
-      clearPending(state.currentBranch, row.uid);
+      clearPending(state.currentBranch, oldUid);
       state.branchCache[state.currentBranch] = {
         docColumns: state.docColumns, contractTypeColumns: state.contractTypeColumns,
         contractTypeLabels: state.contractTypeLabels, rows: state.rows
       };
       markSynced();
       persistCache();
-      showToast(opts.savedMsg || 'Saved');
+      render();
+      addNotification('synced', row.customerName, state.currentBranch);
+      showToast((opts.savedMsg || 'Saved') + ' — ' + row.customerName);
       return true;
     }).catch(function(err){
       console.error(err);
-      queueChange(row, patch);
-      showToast('Saved offline — auto-sync pag may net na');
+      // Already queued in stage 1 — nothing more to do except let the
+      // user know it'll auto-sync once the connection is stable again.
+      addNotification('offline', row.customerName, state.currentBranch);
+      showToast('Saved offline — ' + row.customerName + ' (will auto-sync once online)');
       return false;
     });
   }
@@ -893,14 +1164,17 @@
   // over to the local pending queue. Every request now gets a hard cutoff
   // so a bad connection fails fast instead of "taking forever".
   //
-  // 25s (not something shorter like 10-15s) is deliberate: Apps Script web
-  // apps commonly take several seconds on a "cold start", and mobile data
-  // adds its own latency/jitter on top of that. A too-short timeout on
-  // mobile was aborting requests that were actually about to succeed —
-  // the write still landed on the sheet, but the client had already given
-  // up and re-queued it as "pending", which is exactly the "naka-save na
-  // pero pending pa rin" symptom.
-  var API_TIMEOUT_MS = 25000;
+  // This used to be 25s, on the theory that a too-short timeout could
+  // abort a request that was actually about to succeed, leaving it stuck
+  // "pending" even though the write had already landed on the sheet. But
+  // since persistRow now queues (and reflects on screen) BEFORE the
+  // request fires — not only after it fails — that's no longer a real
+  // risk: saveRow is a safe upsert, so if an aborted request actually did
+  // land, the next auto-sync retry just overwrites it with the same data.
+  // 12s is enough headroom for a normal Apps Script "cold start" while
+  // still failing over quickly on a genuinely unstable connection, instead
+  // of leaving the user staring at a spinner for 25 seconds.
+  var API_TIMEOUT_MS = 12000;
 
   function fetchWithTimeout(url, opts){
     var controller = ('AbortController' in window) ? new AbortController() : null;
@@ -934,6 +1208,7 @@
 
   function loadBranches(){
     if (!state.url){ setConn('', 'Not connected'); return; }
+    if (state.manualOffline){ setConn('', 'Offline (manual)'); return; }
     setConn('pending', 'Connecting…');
     api({ action: 'list' }).then(function(res){
       if (!res.ok) throw new Error(res.error || 'Failed to load branches');
@@ -967,6 +1242,7 @@
 
   els.refreshBtn.addEventListener('click', function(){
     if (!state.currentBranch) return;
+    if (state.manualOffline){ showToast("You're in offline mode — showing cached data"); return; }
     els.refreshBtn.classList.add('spin');
     loadBranchData(true, function(){ els.refreshBtn.classList.remove('spin'); });
   });
@@ -980,7 +1256,8 @@
   }
 
   els.syncBtn.addEventListener('click', function(){
-    if (!state.currentBranch){ showToast('Pumili muna ng branch'); return; }
+    if (!state.currentBranch){ showToast('Select a branch first'); return; }
+    if (state.manualOffline){ showToast("You're in offline mode — tap Go Offline/Online to reconnect first"); return; }
     els.syncBtn.classList.add('spin');
     els.syncBtn.disabled = true;
     loadBranchData(true, function(){
@@ -1001,7 +1278,7 @@
   }
 
   function openAddCustomerModal(){
-    if (!state.currentBranch){ showToast('Pumili muna ng branch'); return; }
+    if (!state.currentBranch){ showToast('Select a branch first'); return; }
     els.addNameInput.value = '';
     els.addModalOverlay.classList.add('show');
     setTimeout(function(){ els.addNameInput.focus(); }, 50);
@@ -1020,7 +1297,7 @@
     var dupe = state.rows.find(function(r){ return r.customerName.trim().toLowerCase() === name.toLowerCase(); });
     if (dupe){
       closeAddCustomerModal();
-      showToast('Nandiyan na ang customer na ito');
+      showToast('This customer is already on the list');
       openCustomerModal(dupe.uid);
       return;
     }
@@ -1042,7 +1319,7 @@
 
     // Create the actual row on the sheet right away (also adds the name to
     // the sheet's own dropdown) instead of waiting for the first checklist tick.
-    persistRow(newRow, {}, { savedMsg: 'Idinagdag' }).then(function(){ render(); });
+    persistRow(newRow, {}, { savedMsg: 'Added' }).then(function(){ render(); });
   }
 
   els.addCustomerBtn.addEventListener('click', openAddCustomerModal);
@@ -1104,6 +1381,20 @@
   // background revalidation above share the exact same logic.
   function fetchBranchData(branch, opts){
     opts = opts || {};
+
+    // Manual offline mode — never touch the network. Fall back to whatever
+    // is cached for this branch (same as a real dropped connection).
+    if (state.manualOffline){
+      if (opts.silent) { if (opts.done) opts.done(); return Promise.resolve(); }
+      if (state.branchCache[branch]){
+        setConn('', 'Offline (manual) — cached data');
+      } else {
+        els.mainArea.innerHTML = '<div class="empty-state"><h2>Offline mode is on</h2><p>No cached data yet for this branch. Go back online to load it.</p></div>';
+      }
+      if (opts.done) opts.done();
+      return Promise.resolve();
+    }
+
     // Single combined request (branchData + customerMasterList in one call)
     // instead of firing two separate Apps Script requests.
     return api(null, 'POST', { action: 'branchDataFull', branch: branch }).then(function(res){
@@ -1451,7 +1742,7 @@
     });
 
     els.modalSaveBtn.disabled = false;
-    els.modalSaveBtn.textContent = 'Done';
+    els.modalSaveBtn.textContent = 'Save';
     els.modalOverlay.classList.add('show');
   }
 
@@ -1534,7 +1825,7 @@
 
     // Close right away — the change is already applied locally (optimistic)
     // and the save completes in the background, so there's nothing to wait for.
-    persistRow(row, { docs: collectModalDocs() }, { savedMsg: 'Naka-save' }).then(function(){
+    persistRow(row, { docs: collectModalDocs() }, { savedMsg: 'Saved' }).then(function(){
       render();
     });
     closeCustomerModal();
