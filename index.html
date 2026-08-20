@@ -458,7 +458,7 @@
     </div>
     <div class="stats" id="statsBar">
       <div class="stat"><span class="n" id="statTotal">0</span><span class="l">Customers</span></div>
-      <div class="stat"><span class="n" id="statComplete">0</span><span class="l">Complete</span></div>
+      <div class="stat"><span class="n" id="statComplete">0</span><span class="l">Sampled (of 25)</span></div>
       <div class="stat"><span class="n" id="statMissing">0</span><span class="l">Missing docs</span></div>
       <div class="dial" id="dial">
         <svg width="52" height="52" viewBox="0 0 52 52">
@@ -528,6 +528,14 @@
   // If you'd rather this connect automatically without pasting the URL each
   // time, put your /exec URL below between the quotes.
   var CONFIG = { WEB_APP_URL: "https://script.google.com/macros/s/AKfycbxkEyETay0uAccTp_2FstLCimP1nB3Lq2NNlFPM5aFha0Nj_nkp8KGnh4C4w8ISEgbjgA/exec" };
+
+  // "Registration Sampling" — per branch, staff only need to review a
+  // SAMPLE of 25 customers, not every single one. Once 25 customers have
+  // at least one box ticked (reviewed), that branch counts as done — the
+  // stats bar/dial below target this number instead of the branch's full
+  // customer count. Change this one number if the required sample size
+  // ever changes.
+  var SAMPLE_TARGET = 25;
 
   var state = {
     url: CONFIG.WEB_APP_URL || "",
@@ -1228,14 +1236,20 @@
       if (missingHere > 0) completeCount++;
       missingCount += missingHere;
     });
+    var sampleDone = completeCount >= SAMPLE_TARGET;
     els.statTotal.textContent = total;
-    els.statComplete.textContent = completeCount;
+    els.statComplete.textContent = completeCount + ' / ' + SAMPLE_TARGET;
     els.statMissing.textContent = missingCount;
-    els.mobileStat.textContent = completeCount + ' of ' + total + ' checked';
-    var pct = total ? Math.round((completeCount/total)*100) : 0;
+    els.mobileStat.textContent = sampleDone
+      ? 'Sample complete — ' + completeCount + ' reviewed'
+      : completeCount + ' of ' + SAMPLE_TARGET + ' sampled';
+    // Progress is against the required SAMPLE of 25, not the branch's full
+    // customer list — reaching 25 reviewed customers is "done" even if the
+    // branch has hundreds more rows still untouched.
+    var pct = Math.min(100, Math.round((completeCount / SAMPLE_TARGET) * 100));
     var circumference = 138.2;
     els.dialArc.setAttribute('stroke-dashoffset', circumference - (circumference*pct/100));
-    els.dialPct.textContent = pct + '%';
+    els.dialPct.textContent = sampleDone ? '✓' : (pct + '%');
 
     if (!rows.length){
       els.mainArea.innerHTML = '<div class="empty-state"><h2>No customers found</h2><p>Nothing matches in this branch yet, or your search didn\'t match anyone.</p></div>';
