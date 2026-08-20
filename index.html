@@ -194,6 +194,8 @@
     cursor:pointer; font-weight:600;
   }
   .pending-pill.show{ display:flex; }
+  .pending-pill.syncing{ opacity:.75; cursor:wait; }
+  .pending-pill.syncing span:first-child{ display:inline-block; animation:spin .7s linear infinite; }
   tr.unregistered td.customer{ color:var(--slate); font-weight:500; font-style:italic; }
   table.ledger td.customer{ cursor:pointer; }
   table.ledger td.customer:hover{ text-decoration:underline; }
@@ -683,10 +685,20 @@
     els.pendingPill.classList.toggle('show', n > 0);
   }
 
+  // Guards against firing overlapping flush attempts (e.g. the 20s
+  // interval and a 'visibilitychange' both landing at once) — everyone
+  // just gets the one already in flight instead of stacking duplicate
+  // requests for the same items.
+  var flushInFlight = null;
+  var quickRetryTimer = null;
+
   function flushPendingQueue(silent){
+    if (flushInFlight) return flushInFlight;
     var keys = Object.keys(pendingQueue);
     if (!keys.length) return Promise.resolve();
     var synced = 0;
+    var stillFailing = false;
+    els.pendingPill.classList.add('syncing');
     var chain = Promise.resolve();
     keys.forEach(function(key){
       chain = chain.then(function(){
@@ -713,10 +725,13 @@
           }
         }).catch(function(err){
           console.error('Auto-sync failed for', key, err); // stays queued, retried next time
+          stillFailing = true;
         });
       });
     });
-    return chain.then(function(){
+    flushInFlight = chain.then(function(){
+      flushInFlight = null;
+      els.pendingPill.classList.remove('syncing');
       updatePendingPill();
       if (synced > 0){
         markSynced();
@@ -728,7 +743,17 @@
         render();
         if (!silent) showToast(synced + (synced === 1 ? ' item synced' : ' items synced'));
       }
+      // A save just failed (dropped signal, brief hiccup) — try again soon
+      // instead of waiting out the full 20s interval, so a spotty mobile
+      // connection recovers quickly once it's back.
+      if (stillFailing && Object.keys(pendingQueue).length && !quickRetryTimer){
+        quickRetryTimer = setTimeout(function(){
+          quickRetryTimer = null;
+          if (Object.keys(pendingQueue).length && navigator.onLine !== false) flushPendingQueue(true);
+        }, 5000);
+      }
     });
+    return flushInFlight;
   }
 
   els.pendingPill.addEventListener('click', function(){ flushPendingQueue(); });
@@ -859,7 +884,15 @@
   // timeout at all — it just sat there indefinitely instead of failing
   // over to the local pending queue. Every request now gets a hard cutoff
   // so a bad connection fails fast instead of "taking forever".
-  var API_TIMEOUT_MS = 15000;
+  //
+  // 25s (not something shorter like 10-15s) is deliberate: Apps Script web
+  // apps commonly take several seconds on a "cold start", and mobile data
+  // adds its own latency/jitter on top of that. A too-short timeout on
+  // mobile was aborting requests that were actually about to succeed —
+  // the write still landed on the sheet, but the client had already given
+  // up and re-queued it as "pending", which is exactly the "naka-save na
+  // pero pending pa rin" symptom.
+  var API_TIMEOUT_MS = 25000;
 
   function fetchWithTimeout(url, opts){
     var controller = ('AbortController' in window) ? new AbortController() : null;
@@ -1015,6 +1048,12 @@
   });
   // ================================================================================
 
+  // Last time each branch was actually fetched fresh from the sheet (not
+  // served from cache) — used to throttle the silent background refresh
+  // below so switching branches back and forth doesn't hammer the API.
+  var branchLastFetchedAt = {};
+  var SILENT_REFRESH_MIN_INTERVAL = 20000;
+
   function loadBranchData(forceRefresh, done){
     var branch = state.currentBranch;
 
@@ -1029,6 +1068,19 @@
       render();
       persistCache();
       if (done) done();
+
+      // STALE-WHILE-REVALIDATE: the cache renders instantly (fast), but it
+      // can be out of date if someone edited the sheet directly, or from
+      // another device — so quietly fetch the real thing right after, in
+      // the background, and swap it in once it arrives. No spinner, no
+      // "Loading…" flash — the user only sees it if something changed.
+      // Skipped while a customer's checklist popup is open (don't want the
+      // list shifting under an active edit) and throttled per branch so
+      // rapid branch-switching doesn't fire a fetch every time.
+      var lastFetch = branchLastFetchedAt[branch] || 0;
+      if (!modalState.uid && (Date.now() - lastFetch) > SILENT_REFRESH_MIN_INTERVAL) {
+        fetchBranchData(branch, { silent: true });
+      }
       return;
     }
 
@@ -1036,10 +1088,25 @@
       els.mainArea.innerHTML = '<div class="empty-state"><h2>Loading ' + escapeHtml(branch) + '…</h2></div>';
     }
 
+    fetchBranchData(branch, { silent: false, done: done });
+  }
+
+  // Does the actual branchDataFull round trip and applies the result to
+  // state — factored out so both the visible "loading" path and the quiet
+  // background revalidation above share the exact same logic.
+  function fetchBranchData(branch, opts){
+    opts = opts || {};
     // Single combined request (branchData + customerMasterList in one call)
     // instead of firing two separate Apps Script requests.
-    api(null, 'POST', { action: 'branchDataFull', branch: branch }).then(function(res){
+    return api(null, 'POST', { action: 'branchDataFull', branch: branch }).then(function(res){
       if (!res.ok) throw new Error(res.error || 'Failed to load branch data');
+      branchLastFetchedAt[branch] = Date.now();
+
+      // The user may have switched to a different branch (or opened the
+      // checklist popup) while this was in flight — don't stomp on
+      // whatever they're looking at now with a stale-relative-to-THEM response.
+      if (state.currentBranch !== branch) return;
+      if (opts.silent && modalState.uid) return;
 
       state.docColumns = res.data.headers;
       state.contractTypeColumns = res.data.contractTypeHeaders || [];
@@ -1084,17 +1151,18 @@
       markSynced();
       persistCache();
       flushPendingQueue(true);
-      if (done) done();
+      if (opts.done) opts.done();
     }).catch(function(err){
       console.error(err);
+      if (opts.silent) return; // background revalidate failed — the cache/UI already showing is fine, say nothing
       if (state.branchCache[branch]) {
         // We already have (and are showing) cached rows for this branch —
         // keep the UI intact, just flag that this refresh didn't reach the sheet.
         setConn('', 'Offline — cached data');
-      } else if (!forceRefresh) {
+      } else {
         els.mainArea.innerHTML = '<div class="empty-state"><h2>Couldn\'t load this branch</h2><p>' + escapeHtml(String(err.message || err)) + '</p></div>';
       }
-      if (done) done();
+      if (opts.done) opts.done();
     });
   }
 
