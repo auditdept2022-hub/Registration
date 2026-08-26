@@ -246,12 +246,15 @@
   .notif-empty{ padding:28px 14px; text-align:center; color:var(--slate); font-size:12.5px; }
   .notif-item{ display:flex; gap:10px; padding:11px 14px; border-bottom:1px solid var(--line); font-size:12.5px; align-items:flex-start; }
   .notif-item:last-child{ border-bottom:none; }
+  .notif-item.clickable{ cursor:pointer; transition:background .12s; }
+  .notif-item.clickable:hover, .notif-item.clickable:active{ background:var(--paper-2); }
   .notif-ic{
     width:22px; height:22px; border-radius:50%; flex-shrink:0; margin-top:1px;
     display:flex; align-items:center; justify-content:center; font-size:11.5px; font-weight:700;
   }
   .notif-ic.synced{ background:var(--green-soft); color:var(--green); }
   .notif-ic.offline{ background:var(--amber-soft); color:#a5680f; }
+  .notif-ic.batch{ background:var(--green-soft); color:var(--green); font-size:11px; letter-spacing:-1px; }
   .notif-body .name{ font-weight:600; color:var(--ink); }
   .notif-body .desc{ color:var(--slate); margin-top:1px; }
   .notif-body .time{ color:var(--slate); font-family:'IBM Plex Mono',monospace; font-size:10.5px; margin-top:3px; }
@@ -857,12 +860,13 @@
     try{ localStorage.setItem(NOTIF_KEY, JSON.stringify(notifications.slice(0, 40))); }catch(e){}
   }
 
-  function addNotification(kind, customerName, branch){
+  function addNotification(kind, customerName, branch, extra){
     notifications.unshift({
       id: 'n' + Date.now() + Math.random().toString(36).slice(2, 7),
-      kind: kind, // 'offline' (saved locally, waiting to sync) | 'synced' (confirmed on the sheet)
+      kind: kind, // 'offline' (saved locally, waiting to sync) | 'synced' (confirmed on the sheet) | 'batch' (a whole queue of pending items just finished syncing)
       customerName: customerName,
       branch: branch,
+      count: (extra && extra.count) || null,
       ts: Date.now()
     });
     if (notifications.length > 40) notifications.length = 40;
@@ -881,8 +885,43 @@
     }
   }
 
-  function notifIcon(kind){ return kind === 'synced' ? '&#10003;' : '&#8635;'; }
-  function notifDesc(kind){ return kind === 'synced' ? 'Synced to Google Sheet' : 'Saved offline — waiting to sync'; }
+  function notifIcon(kind){
+    if (kind === 'synced') return '&#10003;';
+    if (kind === 'batch') return '&#10003;&#10003;';
+    return '&#8635;';
+  }
+  function notifTitle(n){
+    if (n.kind === 'batch') return 'All caught up';
+    return n.customerName || 'Customer';
+  }
+  function notifDesc(n){
+    if (n.kind === 'batch') return 'All ' + n.count + (n.count === 1 ? ' pending item' : ' pending items') + ' accurately saved to Google Sheet';
+    if (n.kind === 'synced') return 'Synced to Google Sheet';
+    return 'Saved offline — waiting to sync';
+  }
+
+  // Jumping to a customer straight from the bell — switches branch if
+  // needed, waits for that branch's data to be ready, then opens the
+  // customer's checklist popup. Gives the notification list an actual
+  // purpose beyond a passive log.
+  function goToCustomerFromNotification(branch, customerName){
+    if (!branch || !customerName) return;
+    function openIt(){
+      var row = state.rows.find(function(r){ return r.customerName === customerName; });
+      if (row) openCustomerModal(row.uid);
+      else showToast('Could not find ' + customerName + ' on ' + branch + ' — the sheet may have changed');
+    }
+    els.notifPanel.classList.remove('show');
+    if (state.currentBranch === branch && state.rows.length){
+      openIt();
+      return;
+    }
+    state.currentBranch = branch;
+    els.branchSelect.value = branch;
+    updateAddButtonState();
+    setStatsVisible(true);
+    loadBranchData(false, openIt);
+  }
 
   function renderNotifPanel(){
     if (!notifications.length){
@@ -890,15 +929,23 @@
       return;
     }
     els.notifList.innerHTML = notifications.map(function(n){
-      return '<div class="notif-item">' +
+      var clickable = n.kind !== 'batch' && n.branch && n.customerName;
+      return '<div class="notif-item' + (clickable ? ' clickable' : '') + '"' +
+          (clickable ? (' data-branch="' + escapeAttr(n.branch) + '" data-name="' + escapeAttr(n.customerName) + '"') : '') + '>' +
         '<span class="notif-ic ' + n.kind + '">' + notifIcon(n.kind) + '</span>' +
         '<div class="notif-body">' +
-          '<div class="name">' + escapeHtml(n.customerName || 'Customer') + '</div>' +
-          '<div class="desc">' + notifDesc(n.kind) + (n.branch ? ' &middot; ' + escapeHtml(n.branch) : '') + '</div>' +
+          '<div class="name">' + escapeHtml(notifTitle(n)) + '</div>' +
+          '<div class="desc">' + notifDesc(n) + (n.kind !== 'batch' && n.branch ? ' &middot; ' + escapeHtml(n.branch) : '') + '</div>' +
           '<div class="time">' + fmtClock(n.ts) + '</div>' +
         '</div></div>';
     }).join('');
   }
+
+  els.notifList.addEventListener('click', function(e){
+    var item = e.target.closest ? e.target.closest('.notif-item.clickable') : null;
+    if (!item) return;
+    goToCustomerFromNotification(item.getAttribute('data-branch'), item.getAttribute('data-name'));
+  });
 
   els.bellBtn.addEventListener('click', function(e){
     e.stopPropagation();
@@ -930,47 +977,67 @@
   // requests for the same items.
   var flushInFlight = null;
   var quickRetryTimer = null;
+  var quickRetryDelay = 3000;
+
+  // How many pending items get sent to Apps Script AT THE SAME TIME.
+  // Before this, every pending item waited its turn in a single-file line —
+  // each one could burn its own full timeout before the next even started,
+  // so e.g. 5 stuck items on a weak signal meant 5 × ~15s (75s) before the
+  // queue cleared. Sending a handful in parallel means the whole batch
+  // finishes in roughly the time of ONE round trip instead of N of them.
+  // Apps Script web app executions are independent per request, so this is
+  // safe — just kept modest so we don't flood an already-weak connection.
+  var FLUSH_CONCURRENCY = 4;
 
   function flushPendingQueue(silent){
     if (flushInFlight) return flushInFlight;
     if (state.manualOffline) return Promise.resolve(); // don't touch the network while forced offline
     var keys = Object.keys(pendingQueue);
     if (!keys.length) return Promise.resolve();
+    var startCount = keys.length;
     var synced = 0;
     var stillFailing = false;
     els.pendingPill.classList.add('syncing');
-    var chain = Promise.resolve();
-    keys.forEach(function(key){
-      chain = chain.then(function(){
-        var item = pendingQueue[key];
-        if (!item) return;
-        // Single request: find/create the row AND write fields + docs in
-        // one Apps Script execution (was two separate requests before).
-        return api(null, 'POST', {
-          action: 'saveRow', branch: item.branch, rowIndex: item.rowIndex,
-          customerName: item.customerName, fields: item.fields || {}, docs: item.docs || {}
-        }).then(function(res){
-          if (!res.ok) throw new Error(res.error || 'Failed to save');
-          delete pendingQueue[key];
-          savePendingQueue();
-          synced++;
-          addNotification('synced', item.customerName, item.branch);
-          if (state.currentBranch === item.branch){
-            var row = state.rows.find(function(r){ return r.uid === item.uid || (res.rowIndex && r.rowIndex === res.rowIndex); });
-            if (row){
-              row.rowIndex = res.rowIndex;
-              row.uid = 'row-' + res.rowIndex;
-              if (item.fields) applyFieldsToRow(row, item.fields);
-              if (item.docs) applyDocsToRow(row, item.docs);
-            }
+
+    var nextIdx = 0;
+    function runNext(){
+      if (nextIdx >= keys.length) return Promise.resolve();
+      var key = keys[nextIdx++];
+      var item = pendingQueue[key];
+      if (!item) return runNext();
+      // Single request: find/create the row AND write fields + docs in
+      // one Apps Script execution (was two separate requests before).
+      return api(null, 'POST', {
+        action: 'saveRow', branch: item.branch, rowIndex: item.rowIndex,
+        customerName: item.customerName, fields: item.fields || {}, docs: item.docs || {}
+      }).then(function(res){
+        if (!res.ok) throw new Error(res.error || 'Failed to save');
+        delete pendingQueue[key];
+        savePendingQueue();
+        synced++;
+        // Only notify per-item when it's a small batch — once several items
+        // are catching up at once, the summary notification below is more
+        // useful than a flood of one-per-customer entries in the bell.
+        if (startCount <= 3) addNotification('synced', item.customerName, item.branch);
+        if (state.currentBranch === item.branch){
+          var row = state.rows.find(function(r){ return r.uid === item.uid || (res.rowIndex && r.rowIndex === res.rowIndex); });
+          if (row){
+            row.rowIndex = res.rowIndex;
+            row.uid = 'row-' + res.rowIndex;
+            if (item.fields) applyFieldsToRow(row, item.fields);
+            if (item.docs) applyDocsToRow(row, item.docs);
           }
-        }).catch(function(err){
-          console.error('Auto-sync failed for', key, err); // stays queued, retried next time
-          stillFailing = true;
-        });
-      });
-    });
-    flushInFlight = chain.then(function(){
+        }
+      }).catch(function(err){
+        console.error('Auto-sync failed for', key, err); // stays queued, retried next time
+        stillFailing = true;
+      }).then(runNext); // this lane grabs the next item as soon as it's free
+    }
+
+    var lanes = [];
+    for (var i = 0; i < Math.min(FLUSH_CONCURRENCY, keys.length); i++) lanes.push(runNext());
+
+    flushInFlight = Promise.all(lanes).then(function(){
       flushInFlight = null;
       els.pendingPill.classList.remove('syncing');
       updatePendingPill();
@@ -984,14 +1051,31 @@
         render();
         if (!silent) showToast(synced + (synced === 1 ? ' item synced' : ' items synced'));
       }
+
+      // Confirms accurately, in the bell, that EVERYTHING that was waiting
+      // has now actually landed on the Google Sheet — the thing that was
+      // asked for. Only fires once the whole batch finishes with zero
+      // failures left in the queue, and only for a batch worth summarizing
+      // (>3 items — smaller batches already got their own per-item
+      // "Saved — <name>" notifications above).
+      if (!stillFailing && startCount > 3 && Object.keys(pendingQueue).length === 0){
+        addNotification('batch', null, null, { count: synced });
+        if (!silent) showToast('All ' + synced + ' pending items synced to Google Sheet');
+      }
+
       // A save just failed (dropped signal, brief hiccup) — try again soon
-      // instead of waiting out the full 20s interval, so a spotty mobile
-      // connection recovers quickly once it's back.
+      // instead of waiting out the full auto-retry interval, so a spotty
+      // mobile connection recovers quickly once it's back. Backs off a bit
+      // each consecutive failure (3s, 6s, 12s... capped at 20s) instead of
+      // hammering a connection that's genuinely down.
       if (stillFailing && Object.keys(pendingQueue).length && !quickRetryTimer){
+        quickRetryDelay = Math.min(quickRetryDelay * 2, 20000);
         quickRetryTimer = setTimeout(function(){
           quickRetryTimer = null;
           if (Object.keys(pendingQueue).length && navigator.onLine !== false) flushPendingQueue(true);
-        }, 5000);
+        }, quickRetryDelay);
+      } else if (!stillFailing){
+        quickRetryDelay = 3000; // reset backoff once a flush fully succeeds
       }
     });
     return flushInFlight;
@@ -1007,14 +1091,15 @@
     if (state.currentBranch) loadBranchData(true);
   });
 
-  // Auto-retry whatever's stuck in the pending queue every 20s (instead of
-  // only on the 'online' event, a manual pill-tap, or the next branch
-  // load) — so a save that failed once (bad signal, momentary hiccup)
-  // doesn't just sit there until the user happens to trigger a retry.
+  // Auto-retry whatever's stuck in the pending queue every 10s (was 20s —
+  // halved so a spotty mobile connection catches up noticeably faster; the
+  // quick-retry backoff right above this already fires sooner still, right
+  // after any failed attempt, so this interval is really just the safety
+  // net for whenever that backoff isn't already running).
   setInterval(function(){
     if (state.manualOffline) return;
     if (Object.keys(pendingQueue).length && navigator.onLine !== false) flushPendingQueue(true);
-  }, 20000);
+  }, 10000);
 
   // Also retry the moment the tab/app comes back into view — covers phones
   // where the browser was backgrounded while offline and the 'online'
@@ -1025,6 +1110,20 @@
       flushPendingQueue(true);
     }
   });
+
+  // Fires the instant the phone's network TYPE changes (e.g. weak 3G ->
+  // WiFi, or signal recovering from 2g to 4g) — on mobile this is often the
+  // very first, most reliable signal that a connection is actually usable
+  // again, sometimes noticeably before the browser's 'online' event fires.
+  try{
+    var netInfo = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    if (netInfo && netInfo.addEventListener){
+      netInfo.addEventListener('change', function(){
+        if (state.manualOffline) return;
+        if (Object.keys(pendingQueue).length && navigator.onLine !== false) flushPendingQueue(true);
+      });
+    }
+  }catch(e){}
 
   // ================= CROSS-DEVICE LIVE REFRESH ===========================
   // Without this, an open branch only ever re-fetches from the sheet when
@@ -1064,43 +1163,45 @@
   // the sheet row and writes everything in a single Apps Script call — see
   // action=saveRow — instead of the old two-request ensure-then-save flow).
   //
-  // OPTIMISTIC, TWO STAGES:
-  //   1) Applied to local state AND queued as "pending" IMMEDIATELY, before
-  //      the network call even starts. This is what fixes the "sobrang
-  //      tagal" / stuck-loading complaint: the checklist, the table, and
-  //      the pending counter all update the instant you tap — they don't
-  //      wait for a slow/unstable connection to time out first. Worst case
-  //      (device goes offline mid-request, tab closes, etc.) the change is
-  //      already safely queued and will auto-sync later, nothing is lost.
-  //   2) The network call then runs in the background. On success it's
-  //      cleared from the pending queue and the sheet/HTML both end up in
-  //      sync. On failure it simply stays queued — auto-sync (the 20s
-  //      interval, the 'online' event, visibilitychange, or a manual pill
-  //      tap) will retry it, so a flaky connection resolves itself without
-  //      the user needing to wait around or re-tap anything.
-  // saveRow is an upsert (find-by-rowIndex-or-create, then overwrite the
-  // given fields/docs), so retrying the same patch is always safe even if
-  // an earlier attempt actually landed on the sheet before timing out.
+  // NOTIFICATIONS, FIXED:
+  // Before, EVERY save — even a normal one on a good connection — first
+  // queued itself as "pending" and could momentarily show an "offline" /
+  // "will auto-sync" message before the (near-instant) real result came
+  // back, which looked wrong when the phone was online the whole time. Now:
+  //   - If we're online, the save is attempted directly. On success you see
+  //     exactly ONE notification: "Saved — <name>", confirmed synced.
+  //     Nothing about "offline" or "pending" appears at all.
+  //   - A safety-net copy is still queued immediately in the background
+  //     either way, so nothing is lost if the app closes mid-save — but
+  //     it's silent, and only turns into a visible "Saved offline"
+  //     notification if the request actually fails/times out, or if
+  //     manual/real offline mode is on.
   function persistRow(row, patch, opts){
     opts = opts || {};
     if (patch.fields) applyFieldsToRow(row, patch.fields);
     if (patch.docs) applyDocsToRow(row, patch.docs);
 
-    // Stage 1 — reflect + queue right away, before the request even fires.
-    queueChange(row, patch);
-    persistCache();
+    // Reflect on screen immediately either way — taps feel instant
+    // regardless of connection speed.
     render();
 
-    // Manual offline mode — stop here. Nothing hits the network; the change
-    // stays queued and will flush automatically the moment the user flips
-    // back to online (see setManualOffline).
-    if (state.manualOffline){
+    // Manual offline mode, or the browser already knows we're offline —
+    // don't even attempt the network call. Queue right away and say so.
+    if (state.manualOffline || navigator.onLine === false){
+      queueChange(row, patch);
+      persistCache();
       addNotification('offline', row.customerName, state.currentBranch);
-      showToast('Saved offline — ' + row.customerName + ' (offline mode)');
+      showToast('Saved offline — ' + row.customerName + (state.manualOffline ? ' (offline mode)' : ' (will auto-sync once online)'));
       return Promise.resolve(false);
     }
 
-    // Stage 2 — try to actually reach the sheet in the background.
+    // Safety net: mirrored into the pending queue right away (silently) so
+    // an app close/crash/lost-signal mid-request never loses the change.
+    // Cleared again below the instant the direct save confirms — the user
+    // never sees this unless the direct save actually fails.
+    queueChange(row, patch);
+    persistCache();
+
     return api(null, 'POST', {
       action: 'saveRow', branch: state.currentBranch, rowIndex: row.rowIndex || null,
       customerName: row.customerName, fields: patch.fields || {}, docs: patch.docs || {}
@@ -1121,8 +1222,9 @@
       return true;
     }).catch(function(err){
       console.error(err);
-      // Already queued in stage 1 — nothing more to do except let the
-      // user know it'll auto-sync once the connection is stable again.
+      // Already queued above — nothing more to do except let the user know
+      // it'll auto-sync once the connection is stable again.
+      render();
       addNotification('offline', row.customerName, state.currentBranch);
       showToast('Saved offline — ' + row.customerName + ' (will auto-sync once online)');
       return false;
@@ -1201,14 +1303,42 @@
   // saves past the old cutoff) has been moved out of the save path entirely
   // (see setupHighlightAutoRefresh_ in Code.gs), so this mostly just covers
   // a normal Apps Script cold start now.
-  var API_TIMEOUT_MS = 15000;
+  var API_TIMEOUT_MS = 15000; // first call of the session — covers a cold Apps Script start
+
+  // Once we've heard back from Apps Script at least once, it's warm — a
+  // request that's still going after a much shorter cutoff almost
+  // certainly means a genuinely bad/dropped connection, not a slow cold
+  // start. Failing fast here (instead of always waiting the full 15s) is
+  // what actually speeds up recovery on weak mobile signal: a shorter
+  // timeout means a stuck request gets kicked back to the pending queue
+  // sooner, and the next retry (parallel, see FLUSH_CONCURRENCY above) can
+  // fire that much sooner too.
+  var API_RETRY_TIMEOUT_MS = 7000;
+  var appHasWarmedUp = false;
+
+  // Adapts further to the browser's own read of connection quality where
+  // available (Chrome/Android mainly — navigator.connection). On a
+  // reported slow-2g/2g link we widen the cutoff a bit, since on those the
+  // request is often just genuinely slow rather than stuck, and aborting
+  // it too eagerly would only force a retry that's just as slow again.
+  function currentTimeoutMs(){
+    var base = appHasWarmedUp ? API_RETRY_TIMEOUT_MS : API_TIMEOUT_MS;
+    try{
+      var conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+      if (conn && (conn.effectiveType === 'slow-2g' || conn.effectiveType === '2g')){
+        return base + 6000;
+      }
+    }catch(e){}
+    return base;
+  }
 
   function fetchWithTimeout(url, opts){
     var controller = ('AbortController' in window) ? new AbortController() : null;
     if (controller) opts = Object.assign({}, opts, { signal: controller.signal });
-    var timer = controller ? setTimeout(function(){ controller.abort(); }, API_TIMEOUT_MS) : null;
+    var timer = controller ? setTimeout(function(){ controller.abort(); }, currentTimeoutMs()) : null;
     return fetch(url, opts).then(function(r){
       if (timer) clearTimeout(timer);
+      appHasWarmedUp = true;
       return r;
     }).catch(function(err){
       if (timer) clearTimeout(timer);
