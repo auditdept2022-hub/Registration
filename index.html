@@ -1026,6 +1026,28 @@
     }
   });
 
+  // ================= CROSS-DEVICE LIVE REFRESH ===========================
+  // Without this, an open branch only ever re-fetches from the sheet when
+  // you reselect it, hit refresh/sync, or reconnect after being offline —
+  // so a change made on another device (e.g. phone) never shows up on this
+  // one until something triggers a manual reload. This silently re-pulls
+  // the currently open branch every BRANCH_POLL_INTERVAL_MS so edits made
+  // elsewhere appear here on their own.
+  // Skipped when: no branch is open, manual offline mode is on, a
+  // customer's checklist popup is open (don't want the list to shift under
+  // an active edit), or there are local unsynced changes still pending
+  // (let those flush first so we don't fetch a stale copy right before our
+  // own save lands).
+  var BRANCH_POLL_INTERVAL_MS = 25000;
+  setInterval(function(){
+    if (state.manualOffline) return;
+    if (!state.currentBranch) return;
+    if (modalState.uid) return;
+    if (Object.keys(pendingQueue).length) return;
+    fetchBranchData(state.currentBranch, { silent: true });
+  }, BRANCH_POLL_INTERVAL_MS);
+  // =========================================================================
+
   function applyDocsToRow(row, docs){
     Object.keys(docs).forEach(function(h){
       var mark = docs[h] ? '✓' : '';
@@ -1174,7 +1196,12 @@
   // 12s is enough headroom for a normal Apps Script "cold start" while
   // still failing over quickly on a genuinely unstable connection, instead
   // of leaving the user staring at a spinner for 25 seconds.
-  var API_TIMEOUT_MS = 12000;
+  // Bumped from 12s to 15s for extra headroom — the branch-highlight
+  // recompute that used to run inside every save (and could push slow/cold
+  // saves past the old cutoff) has been moved out of the save path entirely
+  // (see setupHighlightAutoRefresh_ in Code.gs), so this mostly just covers
+  // a normal Apps Script cold start now.
+  var API_TIMEOUT_MS = 15000;
 
   function fetchWithTimeout(url, opts){
     var controller = ('AbortController' in window) ? new AbortController() : null;
