@@ -75,11 +75,12 @@
   }
   .sync-stamp:empty{ display:none; padding-left:0; margin-left:0; border-left:none; }
 
-  button.linklike{
+  .linklike{
     background:none;border:1px solid rgba(255,255,255,.35);color:var(--paper);
     font-size:12px; padding:6px 10px; border-radius:6px; cursor:pointer; font-family:'Inter',sans-serif;
+    text-decoration:none; display:inline-flex; align-items:center; gap:5px; box-sizing:border-box;
   }
-  button.linklike:hover{ background:rgba(255,255,255,.08); }
+  .linklike:hover{ background:rgba(255,255,255,.08); }
 
   /* ---------- Config panel ---------- */
   .config{
@@ -114,7 +115,6 @@
     min-width:220px;
   }
   .search input{ min-width:200px; }
-  .sync-field{ display:none; }
   .add-btn{
     display:flex; align-items:center; justify-content:center; gap:6px;
     background:var(--green); color:#fff; border:none; padding:9px 14px; border-radius:7px;
@@ -131,12 +131,15 @@
   }
   .add-name-field input:focus{ outline:none; border-color:var(--amber); }
   .sync-btn{
-    display:flex; align-items:center; justify-content:center; gap:8px;
-    background:var(--ink); color:#fff; border:none; padding:9px 14px; border-radius:7px;
-    font-family:'Inter',sans-serif; font-size:13.5px; font-weight:600; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; gap:6px;
+    background:none; border:1px solid rgba(255,255,255,.35); color:var(--paper);
+    font-size:12px; padding:6px 10px; border-radius:6px; cursor:pointer;
+    font-family:'Inter',sans-serif; font-weight:600;
   }
+  .sync-btn:hover{ background:rgba(255,255,255,.08); }
   .sync-btn:active{ filter:brightness(1.15); }
-  .sync-btn .sync-icon{ display:inline-block; font-size:15px; line-height:1; }
+  .sync-btn:disabled{ opacity:.6; cursor:default; }
+  .sync-btn .sync-icon{ display:inline-block; font-size:14px; line-height:1; }
   .sync-btn.spin .sync-icon{ animation:spin .7s linear infinite; }
   .stats{ display:none; gap:22px; margin-left:auto; align-items:center; flex-wrap:wrap; }
   .stats.visible{ display:flex; }
@@ -255,6 +258,7 @@
   .notif-ic.synced{ background:var(--green-soft); color:var(--green); }
   .notif-ic.offline{ background:var(--amber-soft); color:#a5680f; }
   .notif-ic.batch{ background:var(--green-soft); color:var(--green); font-size:11px; letter-spacing:-1px; }
+  .notif-ic.draft{ background:var(--rust-soft); color:var(--rust); }
   .notif-body .name{ font-weight:600; color:var(--ink); }
   .notif-body .desc{ color:var(--slate); margin-top:1px; }
   .notif-body .time{ color:var(--slate); font-family:'IBM Plex Mono',monospace; font-size:10.5px; margin-top:3px; }
@@ -290,6 +294,15 @@
   .modal-header .meta .mono{ font-family:'IBM Plex Mono',monospace; color:#9aa4bd; }
   .modal-header .sample-tag{
     margin-top:8px; font-size:12px; font-weight:700; color:var(--amber);
+  }
+  .modal-header .draft-tag{
+    margin-top:8px; font-size:12px; font-weight:700; color:var(--rust);
+    display:none; align-items:center; gap:6px;
+  }
+  .modal-header .draft-tag.show{ display:flex; }
+  .modal-header .draft-tag::before{
+    content:''; width:7px; height:7px; border-radius:50%; background:var(--rust);
+    animation:pulse 1.1s infinite; flex-shrink:0;
   }
   .modal-close{
     position:absolute; top:14px; right:14px; background:none; border:none; color:var(--paper);
@@ -416,10 +429,8 @@
     }
     select, .search input{ min-width:0; width:100%; font-size:16px; } /* 16px avoids iOS auto-zoom on focus */
     .field{ width:100%; }
-    .sync-field{ display:block; order:3; width:100%; }
     .add-field{ width:100%; order:2; }
     .add-btn{ width:100%; padding:12px; font-size:14px; }
-    .sync-btn{ width:100%; padding:12px; font-size:14px; }
     /* Search goes FIRST — so on-screen keyboard opens with the search box
        (and the matching results right under it) already near the top of
        the viewport, instead of the keyboard covering the name list further
@@ -501,6 +512,7 @@
     <button class="offline-toggle" id="offlineToggleBtn" type="button" title="Force offline / online mode">
       <span class="ot-dot"></span><span id="offlineToggleText">Go Offline</span>
     </button>
+    <button class="sync-btn" id="syncBtn" type="button" title="Sync now"><span class="sync-icon">&#8635;</span><span>Sync</span></button>
     <div class="bell-wrap">
       <button class="bell-btn" id="bellBtn" type="button" title="Notifications">
         <span>&#128276;</span>
@@ -514,6 +526,7 @@
         <div class="notif-list" id="notifList"></div>
       </div>
     </div>
+    <a class="linklike" id="sheetLinkBtn" href="https://docs.google.com/spreadsheets/d/1BZtjUe7SL6CAsP658DoeWcEmjZJ2Nh95TN4RJE0fdQ0/edit?usp=sharing" target="_blank" rel="noopener">&#128203; Open Sheet</a>
     <button class="linklike" id="settingsBtn">Sync settings</button>
   </header>
 
@@ -543,9 +556,6 @@
     <div class="field add-field">
       <label>&nbsp;</label>
       <button class="add-btn" id="addCustomerBtn" type="button" disabled>&#43; Customer</button>
-    </div>
-    <div class="field sync-field" id="syncField">
-      <button class="sync-btn" id="syncBtn" type="button"><span class="sync-icon">&#8635;</span><span>Sync</span></button>
     </div>
     <div class="stats" id="statsBar">
       <div class="stat"><span class="n" id="statTotal">0</span><span class="l">Customers</span></div>
@@ -581,6 +591,7 @@
       <h2 id="modalTitle">&nbsp;</h2>
       <div class="meta" id="modalMeta"></div>
       <div class="sample-tag" id="modalSampleTag"></div>
+      <div class="draft-tag" id="modalDraftTag">Draft — not yet saved. Tap "Save checklist" to sync.</div>
     </div>
     <div class="modal-body">
       <div class="contract-type-box" id="modalContractTypeBox" style="display:none;">
@@ -682,6 +693,7 @@
     modalTitle: document.getElementById('modalTitle'),
     modalMeta: document.getElementById('modalMeta'),
     modalSampleTag: document.getElementById('modalSampleTag'),
+    modalDraftTag: document.getElementById('modalDraftTag'),
     modalContractTypeBox: document.getElementById('modalContractTypeBox'),
     modalContractTypeOptions: document.getElementById('modalContractTypeOptions'),
     modalClose: document.getElementById('modalClose'),
@@ -863,7 +875,7 @@
   function addNotification(kind, customerName, branch, extra){
     notifications.unshift({
       id: 'n' + Date.now() + Math.random().toString(36).slice(2, 7),
-      kind: kind, // 'offline' (saved locally, waiting to sync) | 'synced' (confirmed on the sheet) | 'batch' (a whole queue of pending items just finished syncing)
+      kind: kind, // 'offline' (saved locally, waiting to sync) | 'synced' (confirmed on the sheet) | 'batch' (a whole queue of pending items just finished syncing) | 'draft' (checklist was edited in the popup but the popup was closed without tapping Save — nothing was sent)
       customerName: customerName,
       branch: branch,
       count: (extra && extra.count) || null,
@@ -888,6 +900,7 @@
   function notifIcon(kind){
     if (kind === 'synced') return '&#10003;';
     if (kind === 'batch') return '&#10003;&#10003;';
+    if (kind === 'draft') return '&#9998;';
     return '&#8635;';
   }
   function notifTitle(n){
@@ -897,6 +910,7 @@
   function notifDesc(n){
     if (n.kind === 'batch') return 'All ' + n.count + (n.count === 1 ? ' pending item' : ' pending items') + ' accurately saved to Google Sheet';
     if (n.kind === 'synced') return 'Synced to Google Sheet';
+    if (n.kind === 'draft') return 'Not saved — checklist changes were not sent to the sheet';
     return 'Saved offline — waiting to sync';
   }
 
@@ -979,14 +993,12 @@
   var quickRetryTimer = null;
   var quickRetryDelay = 3000;
 
-  // How many pending items get sent to Apps Script AT THE SAME TIME.
-  // Before this, every pending item waited its turn in a single-file line —
-  // each one could burn its own full timeout before the next even started,
-  // so e.g. 5 stuck items on a weak signal meant 5 × ~15s (75s) before the
-  // queue cleared. Sending a handful in parallel means the whole batch
-  // finishes in roughly the time of ONE round trip instead of N of them.
-  // Apps Script web app executions are independent per request, so this is
-  // safe — just kept modest so we don't flood an already-weak connection.
+  // How many pending items get PICKED UP to wait their turn at once. This
+  // used to control real parallel network requests, but as of FIX 7 above
+  // every actual saveRow request — whichever lane grabbed it — still goes
+  // through the single global writeGate, so they execute one at a time no
+  // matter this number. Kept modest just so a big backlog doesn't all get
+  // pulled into memory at once.
   var FLUSH_CONCURRENCY = 4;
 
   function flushPendingQueue(silent){
@@ -1007,9 +1019,14 @@
       if (!item) return runNext();
       // Single request: find/create the row AND write fields + docs in
       // one Apps Script execution (was two separate requests before).
-      return api(null, 'POST', {
-        action: 'saveRow', branch: item.branch, rowIndex: item.rowIndex,
-        customerName: item.customerName, fields: item.fields || {}, docs: item.docs || {}
+      // Routed through the same writeGate as persistRow (see FIX 7 above)
+      // so pending-queue retries never race a live tap, or each other,
+      // over the same spreadsheet.
+      return enqueueWrite(function(){
+        return api(null, 'POST', {
+          action: 'saveRow', branch: item.branch, rowIndex: item.rowIndex,
+          customerName: item.customerName, fields: item.fields || {}, docs: item.docs || {}
+        });
       }).then(function(res){
         if (!res.ok) throw new Error(res.error || 'Failed to save');
         delete pendingQueue[key];
@@ -1176,6 +1193,66 @@
   //     it's silent, and only turns into a visible "Saved offline"
   //     notification if the request actually fails/times out, or if
   //     manual/real offline mode is on.
+  //
+  // FIX 6 — "malakas net pero stuck pa rin sa Pending". Ticking several
+  // checklist boxes on the SAME brand-new customer (no sheet row yet)
+  // straight from the table — one tap per document column — used to fire
+  // ONE persistRow()/saveRow request PER tap, all at once. Every one of
+  // those requests had rowIndex:null, so every one of them independently
+  // tried to find-or-create that customer's row on the server AT THE SAME
+  // TIME — several concurrent executions racing each other over the same
+  // spreadsheet write. That race (not a slow or bad connection) is what
+  // made them time out and land in "Saved offline — waiting to sync"
+  // repeatedly for the same customer within the same few seconds, even on
+  // fast internet. Saves for the same row are now serialized: only one
+  // saveRow request per row is ever in flight at a time. Extra taps while
+  // one is already in flight no longer fire their own request — they just
+  // mark that row to be sent again, with its latest state, right after the
+  // current request finishes.
+  // FIX 7 — "malakas net pero Offline — cached data pa rin, hindi rin
+  // maload ang ibang branch". FIX 6 above stopped the SAME customer's
+  // taps from racing each other, but DIFFERENT customers' saves — plus the
+  // pending-queue auto-retry below (FLUSH_CONCURRENCY) — could still all
+  // fire at once. They all write to the same Google Sheet, and Google
+  // Sheets effectively serializes real writes to one spreadsheet under the
+  // hood no matter how many Apps Script executions try at once — so
+  // several genuinely simultaneous saves don't finish faster in parallel,
+  // they just queue up on Google's side and every one of them gets
+  // slower, until enough of them time out together. Once that backlog
+  // builds up, even plain READS (opening a branch, refreshing the branch
+  // list) start timing out too — which is why the header can flip to
+  // "Offline — cached data" or a branch can fail to load, while the
+  // phone's internet itself is completely fine. The actual bottleneck was
+  // save requests piling up on the Apps Script/Sheets side, not the
+  // connection.
+  // writeGate below makes sure only ONE write request (saveRow — whether
+  // triggered by a live tap or by the pending-queue auto-retry) is ever in
+  // flight to Apps Script at a time, for the whole app. A big backlog
+  // takes a little longer to fully clear this way, but every individual
+  // request then gets a fair, uncontended shot at finishing inside its
+  // timeout — and reads stop getting starved out by a pile of competing
+  // writes.
+  var writeGate = Promise.resolve();
+  function enqueueWrite(fn){
+    var run = writeGate.then(fn, fn);
+    writeGate = run.catch(function(){}); // keep the chain alive even after a failed write
+    return run;
+  }
+
+  var rowSaveState = new WeakMap();
+
+  // Always sends the row's CURRENT full checklist state (not just whatever
+  // single column this particular call touched) — safe because Apps
+  // Script just rewrites each cell to the value given, and this way a
+  // save that got coalesced with others (see FIX 6 above) always carries
+  // every tick made while it was waiting, not just the first or last one.
+  function docsPayloadForRow(row){
+    var docs = {};
+    state.docColumns.forEach(function(h){ docs[h] = isChecked(row.docs[h]); });
+    state.contractTypeColumns.forEach(function(h){ docs[h] = isChecked(row.contractType[h]); });
+    return docs;
+  }
+
   function persistRow(row, patch, opts){
     opts = opts || {};
     if (patch.fields) applyFieldsToRow(row, patch.fields);
@@ -1202,9 +1279,33 @@
     queueChange(row, patch);
     persistCache();
 
-    return api(null, 'POST', {
-      action: 'saveRow', branch: state.currentBranch, rowIndex: row.rowIndex || null,
-      customerName: row.customerName, fields: patch.fields || {}, docs: patch.docs || {}
+    var st = rowSaveState.get(row);
+    if (!st){ st = { inFlight: null, again: false, savedMsg: null, fields: null }; rowSaveState.set(row, st); }
+    if (opts.savedMsg) st.savedMsg = opts.savedMsg;
+    if (patch.fields) st.fields = Object.assign(st.fields || {}, patch.fields);
+
+    if (st.inFlight){
+      // A save for this exact row is already on the way to the server —
+      // see FIX 6 above for why we never let a second one run alongside
+      // it. Flag it to run again once this one lands, with the latest state.
+      st.again = true;
+      return st.inFlight;
+    }
+    return runRowSave(row, st);
+  }
+
+  function runRowSave(row, st){
+    st.again = false;
+    var savedMsg = st.savedMsg || 'Saved';
+    st.savedMsg = null;
+    var fields = st.fields || {};
+    st.fields = null;
+
+    var p = enqueueWrite(function(){
+      return api(null, 'POST', {
+        action: 'saveRow', branch: state.currentBranch, rowIndex: row.rowIndex || null,
+        customerName: row.customerName, fields: fields, docs: docsPayloadForRow(row)
+      });
     }).then(function(res){
       if (!res.ok) throw new Error(res.error || 'Failed to save');
       var oldUid = row.uid;
@@ -1218,7 +1319,7 @@
       persistCache();
       render();
       addNotification('synced', row.customerName, state.currentBranch);
-      showToast((opts.savedMsg || 'Saved') + ' — ' + row.customerName);
+      showToast(savedMsg + ' — ' + row.customerName);
       return true;
     }).catch(function(err){
       console.error(err);
@@ -1228,7 +1329,16 @@
       addNotification('offline', row.customerName, state.currentBranch);
       showToast('Saved offline — ' + row.customerName + ' (will auto-sync once online)');
       return false;
+    }).finally(function(){
+      st.inFlight = null;
+      // More ticks came in on this row while the request above was in
+      // flight — send its latest state right away, in its own request,
+      // never overlapping with another one for the same row.
+      if (st.again) st.inFlight = runRowSave(row, st);
     });
+
+    st.inFlight = p;
+    return p;
   }
 
   function timeAgo(ts){
@@ -1311,9 +1421,13 @@
   // start. Failing fast here (instead of always waiting the full 15s) is
   // what actually speeds up recovery on weak mobile signal: a shorter
   // timeout means a stuck request gets kicked back to the pending queue
-  // sooner, and the next retry (parallel, see FLUSH_CONCURRENCY above) can
-  // fire that much sooner too.
-  var API_RETRY_TIMEOUT_MS = 7000;
+  // sooner, and the next retry can fire that much sooner too. Bumped from
+  // 7s to 10s for a bit more headroom under normal (non-cold-start) load —
+  // this only covers time actually spent waiting on Apps Script once a
+  // request has started; time spent queued behind another write in
+  // writeGate (FIX 7 above) doesn't count against it, since the timer only
+  // starts once the request is actually sent.
+  var API_RETRY_TIMEOUT_MS = 10000;
   var appHasWarmedUp = false;
 
   // Adapts further to the browser's own read of connection quality where
@@ -1463,7 +1577,17 @@
       rowIndex: null, no: '', customerName: name, typeOfContract: '', notes: '',
       engineNo: '', invoicedDate: '', docs: {}, contractType: {}
     };
-    newRow.uid = 'new-' + Date.now() + '-' + name;
+    // FIX 5: use a name-based uid (matching the same formula used when
+    // rows are loaded/reloaded from the sheet below), not a timestamp.
+    // A timestamp-based uid here used to go stale the moment the next
+    // background refresh (every 25s, or any sync) rebuilt state.rows and
+    // recomputed this same "new" row's uid from its position in the
+    // customer list — a DIFFERENT value than the timestamp one that had
+    // already been queued for saving. That mismatch orphaned the pending
+    // queue entry (it could never be matched back to the row on screen),
+    // which is why items already saved to the Google Sheet could keep
+    // showing "Pending" in the dashboard indefinitely.
+    newRow.uid = 'new-' + name;
     state.rows.push(newRow);
     state.branchCache[state.currentBranch] = {
       docColumns: state.docColumns, contractTypeColumns: state.contractTypeColumns,
@@ -1592,10 +1716,25 @@
       // row number) is unique when the row already exists on the sheet; for
       // rows only coming from the dropdown master list (not yet on the sheet)
       // we fall back to a synthetic-but-unique id.
-      rows.forEach(function(r, idx){
+      //
+      // FIX 5: that synthetic id used to be 'new-' + idx + '-' + customerName
+      // — idx being this row's position in the freshly-rebuilt array. That
+      // position isn't stable: it shifts every time the mix of "new" vs
+      // "real" rows changes (e.g. another new customer elsewhere graduates
+      // to a real sheet row), so the SAME customer could get a different
+      // uid on every reload/poll. Any save already queued under the old uid
+      // then became permanently unmatched to the row on screen — the queue
+      // entry itself still resolved and cleared eventually, but the
+      // "Pending" badge on the visible row (now under a new uid) came from
+      // a DIFFERENT stale queue entry, so it looked like nothing was ever
+      // syncing even though the Sheet was already correct. Since a
+      // customer name only ever appears once among these not-yet-on-sheet
+      // rows (see the existingNames de-dupe above), the name alone is
+      // already a stable, unique key — no index needed.
+      rows.forEach(function(r){
         r.uid = (r.rowIndex !== null && r.rowIndex !== undefined)
           ? ('row-' + r.rowIndex)
-          : ('new-' + idx + '-' + r.customerName);
+          : ('new-' + r.customerName);
         if (!r.contractType) r.contractType = {};
       });
 
@@ -1821,7 +1960,7 @@
   }
   function escapeAttr(s){ return escapeHtml(s); }
 
-  var modalState = { uid: null, historyPushed: false };
+  var modalState = { uid: null, historyPushed: false, dirty: false };
 
   // ---- Make the phone's back gesture close the modal instead of leaving
   // the site. Opening the modal pushes a throwaway history entry; the
@@ -1840,6 +1979,8 @@
     var row = state.rows.find(function(r){ return r.uid === uid; });
     if (!row) return;
     modalState.uid = uid;
+    modalState.dirty = false;
+    els.modalDraftTag.classList.remove('show');
 
     if (!modalState.historyPushed) {
       history.pushState({ ledgerModal: true }, '', location.href);
@@ -1882,7 +2023,7 @@
             el.classList.add('active');
             el.querySelector('.ct-box').innerHTML = '&#10003;';
           }
-          scheduleAutosave();
+          markDraftDirty();
         });
       });
     } else {
@@ -1895,11 +2036,11 @@
       return '<label class="doc-row"><input type="checkbox" data-col="' + escapeAttr(h) + '"' + (checked ? ' checked' : '') + '><span>' + escapeHtml(docLabel(h)) + '</span></label>';
     }).join('');
     Array.prototype.forEach.call(els.modalDocList.querySelectorAll('input[type=checkbox]'), function(cb){
-      cb.addEventListener('change', scheduleAutosave);
+      cb.addEventListener('change', markDraftDirty);
     });
 
     els.modalSaveBtn.disabled = false;
-    els.modalSaveBtn.textContent = 'Save';
+    els.modalSaveBtn.textContent = 'Save checklist';
     els.modalOverlay.classList.add('show');
   }
 
@@ -1913,16 +2054,34 @@
     }
   }
 
-  function closeCustomerModal(fromPopState){
+  // closeCustomerModal(fromPopState, fromSave) — fromSave is true only when
+  // the modal is closing right after a successful tap of "Save checklist".
+  // If the modal has unsaved (draft) changes and is closing any OTHER way
+  // (X, tapping outside, back gesture), nothing was sent to the sheet —
+  // notify the user instead of silently discarding it, so they know to
+  // reopen the customer and tap Save again if they meant to keep the
+  // changes.
+  function closeCustomerModal(fromPopState, fromSave){
+    var wasDirty = modalState.dirty;
+    var uid = modalState.uid;
+    var row = uid ? state.rows.find(function(r){ return r.uid === uid; }) : null;
+    var branchAtClose = state.currentBranch;
+
     els.modalOverlay.classList.remove('show');
-    if (autosaveTimer){ clearTimeout(autosaveTimer); autosaveTimer = null; }
+    els.modalDraftTag.classList.remove('show');
     modalState.uid = null;
+    modalState.dirty = false;
     if (modalState.historyPushed) {
       modalState.historyPushed = false;
       // Closed by tapping X / outside / Done — not by the back gesture —
       // so pop the throwaway entry we pushed ourselves, keeping the back
       // stack exactly where it was before the modal opened.
       if (!fromPopState) history.back();
+    }
+
+    if (wasDirty && !fromSave && row){
+      showToast('Draft lang — hindi na-save ang checklist ni ' + row.customerName);
+      addNotification('draft', row.customerName, branchAtClose);
     }
   }
 
@@ -1935,7 +2094,7 @@
     Array.prototype.forEach.call(els.modalDocList.querySelectorAll('input[type=checkbox]'), function(cb){
       cb.checked = false;
     });
-    scheduleAutosave();
+    markDraftDirty();
   });
 
   function collectModalDocs(){
@@ -1955,22 +2114,15 @@
     return docs;
   }
 
-  // Every checkbox/contract-type tap in the modal auto-saves itself a
-  // short moment after the last change (so a burst of taps collapses into
-  // one save) — no need to press the button for it to be recorded.
-  var autosaveTimer = null;
-  function scheduleAutosave(){
-    if (autosaveTimer) clearTimeout(autosaveTimer);
-    autosaveTimer = setTimeout(function(){
-      autosaveTimer = null;
-      var uid = modalState.uid;
-      var row = state.rows.find(function(r){ return r.uid === uid; });
-      if (!row) return;
-      persistRow(row, { docs: collectModalDocs() }).then(function(){
-        if (modalState.uid === uid) updateModalSampleTag(row);
-        render();
-      });
-    }, 400);
+  // Checking a box (or picking a contract type, or "All documents on file")
+  // in the popup no longer saves right away — it just marks the checklist
+  // as a draft in progress. Nothing is sent to the Google Sheet until
+  // "Save checklist" is actually tapped. This also fixes the popup feeling
+  // slow while you're still ticking boxes — every tap used to fire its own
+  // network request in the background.
+  function markDraftDirty(){
+    modalState.dirty = true;
+    els.modalDraftTag.classList.add('show');
   }
 
   els.modalSaveBtn.addEventListener('click', function(){
@@ -1978,14 +2130,12 @@
     var row = state.rows.find(function(r){ return r.uid === uid; });
     if (!row) return;
 
-    if (autosaveTimer){ clearTimeout(autosaveTimer); autosaveTimer = null; }
-
     // Close right away — the change is already applied locally (optimistic)
     // and the save completes in the background, so there's nothing to wait for.
     persistRow(row, { docs: collectModalDocs() }, { savedMsg: 'Saved' }).then(function(){
       render();
     });
-    closeCustomerModal();
+    closeCustomerModal(false, true);
   });
 
   hydrateFromCache();
