@@ -1009,6 +1009,7 @@
     var startCount = keys.length;
     var synced = 0;
     var stillFailing = false;
+    var stillFailingIsSetupProblem = false;
     els.pendingPill.classList.add('syncing');
 
     var nextIdx = 0;
@@ -1048,13 +1049,29 @@
       }).catch(function(err){
         console.error('Auto-sync failed for', key, err); // stays queued, retried next time
         stillFailing = true;
+        if (err && err.authOrDeploy) stillFailingIsSetupProblem = true;
       }).then(runNext); // this lane grabs the next item as soon as it's free
     }
 
     var lanes = [];
     for (var i = 0; i < Math.min(FLUSH_CONCURRENCY, keys.length); i++) lanes.push(runNext());
 
-    flushInFlight = Promise.all(lanes).then(function(){
+    // Belt-and-suspenders: every individual request already has its own
+    // timeout (fetchWithTimeout), so this SHOULDN'T be needed — but if
+    // anything ever slips through and a lane hangs anyway, flushInFlight
+    // would stay set forever, and since flushPendingQueue's very first
+    // line is "if (flushInFlight) return flushInFlight", that one hang
+    // would silently block every future retry attempt (the 10s interval,
+    // the online event, coming back into view — all of them) permanently.
+    // That's exactly the "stuck on syncing forever" failure mode this is
+    // guarding against, so cap the whole batch at a hard ceiling no matter
+    // what any individual request is doing.
+    var whole = Promise.race([
+      Promise.all(lanes),
+      new Promise(function(resolve){ setTimeout(resolve, 45000); })
+    ]);
+
+    flushInFlight = whole.then(function(){
       flushInFlight = null;
       els.pendingPill.classList.remove('syncing');
       updatePendingPill();
@@ -1086,6 +1103,14 @@
       // each consecutive failure (3s, 6s, 12s... capped at 20s) instead of
       // hammering a connection that's genuinely down.
       if (stillFailing && Object.keys(pendingQueue).length && !quickRetryTimer){
+        if (stillFailingIsSetupProblem){
+          // Keep retrying in the background (in case it gets fixed live),
+          // but make sure the header clearly says WHY nothing is landing
+          // on the Sheet — this is not a signal problem, so leaving it
+          // looking like an ordinary "syncing…" spinner just hides the
+          // real cause indefinitely.
+          setConn('', 'Setup problem — check Apps Script access');
+        }
         quickRetryDelay = Math.min(quickRetryDelay * 2, 20000);
         quickRetryTimer = setTimeout(function(){
           quickRetryTimer = null;
@@ -1335,8 +1360,17 @@
       // Already queued above — nothing more to do except let the user know
       // it'll auto-sync once the connection is stable again.
       render();
-      addNotification('offline', row.customerName, state.currentBranch);
-      showToast('Saved offline — ' + row.customerName + ' (will auto-sync once online)');
+      if (err && err.authOrDeploy){
+        // A connectivity retry will NEVER fix this on its own — it needs
+        // the person to actually go check the Apps Script deployment
+        // settings, so say that plainly instead of implying "just wait".
+        addNotification('offline', row.customerName, state.currentBranch);
+        setConn('', 'Setup problem — check Apps Script access');
+        showToast('Not saving to the Sheet — check Sync settings / Apps Script deployment access');
+      } else {
+        addNotification('offline', row.customerName, state.currentBranch);
+        showToast('Saved offline — ' + row.customerName + ' (will auto-sync once online)');
+      }
       return false;
     }).finally(function(){
       st.inFlight = null;
@@ -1417,13 +1451,12 @@
   // 12s is enough headroom for a normal Apps Script "cold start" while
   // still failing over quickly on a genuinely unstable connection, instead
   // of leaving the user staring at a spinner for 25 seconds.
-  // Bumped further (15s -> 20s cold / 10s -> 14s warm) as extra headroom on
-  // top of the backend speed-up in Code.gs (branchDataFull now does ONE
-  // sheet read + ONE capped Data Validation scan instead of two of each —
-  // see FIX 5 in Code.gs) — this is now mostly a true "connection is
-  // actually stuck" cutoff rather than something a normal cold start or a
-  // moderately large branch tab would realistically hit.
-  var API_TIMEOUT_MS = 20000; // first call of the session — covers a cold Apps Script start
+  // Bumped from 12s to 15s for extra headroom — the branch-highlight
+  // recompute that used to run inside every save (and could push slow/cold
+  // saves past the old cutoff) has been moved out of the save path entirely
+  // (see setupHighlightAutoRefresh_ in Code.gs), so this mostly just covers
+  // a normal Apps Script cold start now.
+  var API_TIMEOUT_MS = 15000; // first call of the session — covers a cold Apps Script start
 
   // Once we've heard back from Apps Script at least once, it's warm — a
   // request that's still going after a much shorter cutoff almost
@@ -1437,7 +1470,7 @@
   // request has started; time spent queued behind another write in
   // writeGate (FIX 7 above) doesn't count against it, since the timer only
   // starts once the request is actually sent.
-  var API_RETRY_TIMEOUT_MS = 14000;
+  var API_RETRY_TIMEOUT_MS = 10000;
   var appHasWarmedUp = false;
 
   // Adapts further to the browser's own read of connection quality where
@@ -1473,18 +1506,57 @@
 
   function api(params, method, body){
     var url = state.url;
+    var req;
     if (method === 'GET' || !method){
       var qs = Object.keys(params || {}).map(function(k){
         return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
       }).join('&');
       url += (url.indexOf('?') === -1 ? '?' : '&') + qs;
-      return fetchWithTimeout(url).then(function(r){ return r.json(); });
+      req = fetchWithTimeout(url);
     } else {
-      return fetchWithTimeout(url, {
+      req = fetchWithTimeout(url, {
         method: 'POST',
         body: JSON.stringify(body)
-      }).then(function(r){ return r.json(); });
+      });
     }
+    return req.then(function(r){
+      return r.text().then(function(raw){
+        var parsed;
+        try{ parsed = JSON.parse(raw); }
+        catch(e){
+          // The request reached a server and got a response back — this is
+          // NOT a dropped-signal/offline situation, so it must not be
+          // treated (and silently retried forever) as one. It's almost
+          // always Apps Script sending back an HTML page instead of JSON:
+          // a Google sign-in/permission prompt (deployment access isn't
+          // set to "Anyone"), or an unhandled error trace from the script
+          // itself. Retrying the exact same request will just get the
+          // exact same HTML back every time — that's the "stuck on
+          // syncing forever, nothing ever lands in the Sheet" symptom.
+          var err = new Error('The Apps Script Web App did not return valid data — check that the deployment\'s access is set to "Anyone", and that the URL points at the latest deployment.');
+          err.authOrDeploy = true;
+          throw err;
+        }
+        if (!r.ok && !parsed){
+          var httpErr = new Error('Server error (' + r.status + ')');
+          throw httpErr;
+        }
+        // A well-formed { ok:false, error:'Unknown action: ...' } means the
+        // request reached Apps Script fine, but the deployed script doesn't
+        // recognize this action at all — almost always because Code.gs was
+        // edited/saved but never redeployed as a "new version" (Deploy >
+        // Manage deployments > pencil icon > New version), so the live
+        // /exec URL is still running an older copy of the script. Retrying
+        // will fail the exact same way every time, same as the
+        // JSON-parse-failure case above, so it gets the same treatment.
+        if (parsed && parsed.ok === false && /^unknown action/i.test(String(parsed.error || ''))){
+          var deployErr = new Error(parsed.error + ' — the deployed Apps Script is out of date. Deploy > Manage deployments > pencil icon > New version.');
+          deployErr.authOrDeploy = true;
+          throw deployErr;
+        }
+        return parsed;
+      });
+    });
   }
 
   function loadBranches(){
@@ -1503,7 +1575,15 @@
       flushPendingQueue(true);
     }).catch(function(err){
       console.error(err);
-      if (state.branches.length){
+      if (err && err.authOrDeploy){
+        // Got a response, just not a valid one — different from "offline",
+        // and cached data on screen shouldn't hide that something needs
+        // fixing on the Apps Script side.
+        setConn('', 'Setup problem — check Apps Script access');
+        if (!state.branches.length){
+          els.mainArea.innerHTML = '<div class="empty-state"><h2>Could not connect</h2><p>' + escapeHtml(err.message) + '</p></div>';
+        }
+      } else if (state.branches.length){
         // Already showing cached branches/data (from hydrateFromCache) —
         // don't blow away the UI, just flag that we're offline.
         setConn('', 'Offline — cached data');
@@ -1782,8 +1862,13 @@
       if (opts.done) opts.done();
     }).catch(function(err){
       console.error(err);
-      if (opts.silent) return; // background revalidate failed — the cache/UI already showing is fine, say nothing
-      if (state.branchCache[branch]) {
+      if (opts.silent && !(err && err.authOrDeploy)) return; // background revalidate failed — the cache/UI already showing is fine, say nothing
+      if (err && err.authOrDeploy){
+        setConn('', 'Setup problem — check Apps Script access');
+        if (!state.branchCache[branch]){
+          els.mainArea.innerHTML = '<div class="empty-state"><h2>Couldn\'t load this branch</h2><p>' + escapeHtml(err.message) + '</p></div>';
+        }
+      } else if (state.branchCache[branch]) {
         // We already have (and are showing) cached rows for this branch —
         // keep the UI intact, just flag that this refresh didn't reach the sheet.
         setConn('', 'Offline — cached data');
